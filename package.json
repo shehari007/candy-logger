@@ -1,0 +1,54 @@
+{
+  "name": "candy-logger",
+  "version": "1.0.1",
+  "description": "A beautiful popup logger that displays console messages in a floating, minimizable box",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "logger",
+    "console",
+    "popup",
+    "debug",
+    "logging"
+  ],
+  "author": "Muhammad Sheharyar Butt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shehari007/candy-logger.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81"
+  },
+  "peerDependenciesMeta": {
+    "blessed": {
+      "optional": true
+    }
+  },
+  "browser": {
+    "blessed": false,
+    "./dist/terminal-ui.js": false
+  },
+  "files": [
+    "dist"
+  ]
+}
