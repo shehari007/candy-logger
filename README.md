@@ -2,6 +2,10 @@
 
 A beautiful, lightweight logging library for JavaScript/TypeScript with an elegant popup UI for browser and enhanced terminal output for Node.js.
 
+## 🚀 [Live Demo](https://candy-logger.msyb.dev)
+
+Try the interactive demo to see all features in action!
+
 ## ✨ Features
 
 - 🎨 **Beautiful Browser UI** - Floating, draggable popup logger (dev mode only)
@@ -214,7 +218,17 @@ candy.log('Hello', { typed: true });
 
 ## 📋 Changelog
 
-### v1.0.2 (Latest)
+### v1.0.3 (Latest)
+
+**🆕 New Features:**
+- 📁 **Project Structure** - Organized demo files and documentation
+
+**🔧 Bug Fixes:**
+- Fixed directory structure and file organization
+- Improved demo page styling and functionality
+- Enhanced documentation with demo link
+
+### v1.0.2
 
 **🆕 New Features:**
 - 📐 **Resizable UI** - Drag the bottom-right corner to resize the candy logger (300px-800px width, 200px-80vh height)
