@@ -1,5 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/demo-ui.html" }
+  "builds": [
+    { "src": "demo-ui.html", "use": "@vercel/static" }
+  ],
+  "routes": [
+    { "src": "/", "dest": "demo-ui.html" }
   ]
 }
