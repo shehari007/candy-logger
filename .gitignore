@@ -5,5 +5,4 @@ dist/
 examples/
 .env
 demo.html
-test-ui.html
 test-blessed.js
