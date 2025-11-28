@@ -21,7 +21,7 @@ export class CandyTerminalUI {
   private isRunning = false;
 
   constructor() {
-    // Clear screen immediately to prevent any output bleeding
+    // Clear screen and hide cursor immediately
     if (process.stdout.isTTY) {
       process.stdout.write('\x1b[2J\x1b[H\x1b[?25l');
     }
@@ -42,9 +42,16 @@ export class CandyTerminalUI {
       mouse: true,
       fullUnicode: true,
       forceUnicode: true,
-      dockBorders: true,
+      dockBorders: false,
       ignoreLocked: ['C-c'],
-      warnings: false
+      warnings: false,
+      autoPadding: false,
+      cursor: {
+        artificial: true,
+        shape: 'line',
+        blink: true,
+        color: null
+      }
     });
 
     // Prevent any writes to stdout/stderr from bleeding through
@@ -70,7 +77,7 @@ export class CandyTerminalUI {
       top: 3,
       left: 0,
       width: '100%',
-      height: 5,
+      height: 6,
       tags: true,
       style: {
         fg: 'white',
@@ -83,10 +90,10 @@ export class CandyTerminalUI {
 
     // Log box
     this.logBox = blessed.box({
-      top: 8,
+      top: 9,
       left: 0,
       width: '100%',
-      height: '100%-12',
+      height: '100%-13',
       scrollable: true,
       alwaysScroll: true,
       scrollbar: {
@@ -169,6 +176,8 @@ export class CandyTerminalUI {
         mouse: true,
         keys: true,
         shrink: true,
+        clickable: true,
+        input: true,
         padding: {
           left: 1,
           right: 1
@@ -199,6 +208,10 @@ export class CandyTerminalUI {
       button.on('press', () => {
         this.setFilter(filter.value);
       });
+      
+      button.on('click', () => {
+        this.setFilter(filter.value);
+      });
 
       this.filterButtons.push(button);
       leftPosition += 14;
@@ -218,6 +231,8 @@ export class CandyTerminalUI {
       mouse: true,
       keys: true,
       shrink: true,
+      clickable: true,
+      input: true,
       style: {
         fg: 'yellow',
         bg: 'black',
@@ -229,6 +244,10 @@ export class CandyTerminalUI {
     });
 
     this.clearButton.on('press', () => {
+      this.clearLogs();
+    });
+    
+    this.clearButton.on('click', () => {
       this.clearLogs();
     });
 
@@ -244,6 +263,8 @@ export class CandyTerminalUI {
       mouse: true,
       keys: true,
       shrink: true,
+      clickable: true,
+      input: true,
       style: {
         fg: 'red',
         bg: 'black',
@@ -255,6 +276,15 @@ export class CandyTerminalUI {
     });
 
     this.quitButton.on('press', () => {
+      this.isRunning = false;
+      // Show cursor again before exiting
+      if (process.stdout.isTTY) {
+        process.stdout.write('\x1b[?25h'); // Show cursor
+      }
+      process.exit(0);
+    });
+    
+    this.quitButton.on('click', () => {
       this.isRunning = false;
       // Show cursor again before exiting
       if (process.stdout.isTTY) {

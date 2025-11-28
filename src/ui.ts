@@ -87,7 +87,11 @@ export class CandyLoggerUI {
         bottom: 20px;
         right: 20px;
         width: 400px;
-        max-height: 500px;
+        min-width: 300px;
+        max-width: 800px;
+        height: 500px;
+        min-height: 200px;
+        max-height: 80vh;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         border-radius: 12px;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
@@ -97,6 +101,8 @@ export class CandyLoggerUI {
         opacity: 0.1;
         display: flex;
         flex-direction: column;
+        resize: both;
+        overflow: hidden;
       }
 
       .candy-logger-container:hover {
@@ -112,11 +118,13 @@ export class CandyLoggerUI {
       }
 
       .candy-logger-container.minimized {
-        max-height: 50px;
+        height: auto;
+        min-height: auto;
+        max-height: none;
       }
 
       .candy-logger-container.minimized .candy-logger-body {
-        display: none;
+        display: none !important;
       }
 
       .candy-logger-header {
@@ -172,8 +180,8 @@ export class CandyLoggerUI {
       .candy-logger-logs {
         padding: 12px;
         overflow-y: auto;
-        max-height: 450px;
         flex: 1;
+        min-height: 0;
       }
 
       .candy-logger-logs::-webkit-scrollbar {
@@ -420,6 +428,9 @@ export class CandyLoggerUI {
         font-size: 13px;
         outline: none;
         transition: all 0.2s;
+        box-sizing: border-box;
+        text-align: left;
+        margin: 0;
       }
 
       .candy-search-input:focus {
@@ -434,6 +445,21 @@ export class CandyLoggerUI {
       .candy-logger-container.minimized .candy-logger-filters,
       .candy-logger-container.minimized .candy-logger-search {
         display: none !important;
+      }
+      
+      .candy-logger-container::-webkit-resizer {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 0 0 12px 0;
+      }
+      
+      .candy-logger-container::after {
+        content: "⋰";
+        position: absolute;
+        bottom: 2px;
+        right: 2px;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 12px;
+        pointer-events: none;
       }
     `;
     document.head.appendChild(style);

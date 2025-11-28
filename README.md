@@ -5,6 +5,8 @@ A beautiful, lightweight logging library for JavaScript/TypeScript with an elega
 ## ✨ Features
 
 - 🎨 **Beautiful Browser UI** - Floating, draggable popup logger (dev mode only)
+- 📐 **Resizable UI** - Drag corners to resize the logger (300px-800px × 200px-80vh)
+- 🔧 **Force UI Mode** - Show UI in any environment with `forceUI: true`
 - 🖥️ **Enhanced Terminal Output** - Colorful, formatted logs in Node.js
 - 🔍 **Filter by Level** - Filter logs by type (log, info, warn, error)
 - 🔎 **Search Logs** - Real-time log search functionality
@@ -209,6 +211,32 @@ candy.log('Hello', { typed: true });
 - ✅ **Beautiful output** - Makes debugging enjoyable
 - ✅ **Framework agnostic** - Works with React, Vue, Angular, Express, etc.
 - ✅ **Lightweight** - Minimal bundle size impact
+
+## 📋 Changelog
+
+### v1.0.2 (Latest)
+
+**🆕 New Features:**
+- 📐 **Resizable UI** - Drag the bottom-right corner to resize the candy logger (300px-800px width, 200px-80vh height)
+- 🔧 **Force UI Mode** - New `forceUI` option to bypass development-only restriction
+- ⋰ **Resize Handle** - Visual resize indicator in the bottom-right corner
+
+**✨ Enhancements:**
+- Dynamic height adjustment when resizing
+- Improved minimize behavior (title bar only)
+- Better text alignment in search input
+- Clean minimized state without background overflow
+
+**Usage:**
+```javascript
+// Force UI to show in any environment (including production)
+overrideConsole({ forceUI: true });
+
+// The logger UI is now fully resizable - just drag the corner!
+```
+
+### v1.0.1
+- Initial stable release with browser UI and terminal features
 
 ## 📄 License
 

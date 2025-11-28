@@ -44,7 +44,7 @@ class CandyLogger {
     error: typeof console.error;
   };
 
-  constructor(options: { interactive?: boolean } = {}) {
+  constructor(options: { interactive?: boolean; forceUI?: boolean } = {}) {
     this.isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
     this.useInteractiveUI = options.interactive === true;
     
@@ -56,7 +56,7 @@ class CandyLogger {
       error: console.error.bind(console),
     };
     
-    // Only enable UI in development mode
+    // Check if UI should be enabled
     const isDevelopment = this.isBrowser && (
       (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') ||
       window.location.hostname === 'localhost' ||
@@ -64,7 +64,10 @@ class CandyLogger {
       window.location.hostname.includes('local')
     );
     
-    if (this.isBrowser && isDevelopment) {
+    // Force UI if explicitly requested or in development
+    const shouldShowUI = options.forceUI === true || isDevelopment;
+    
+    if (this.isBrowser && shouldShowUI) {
       this.ui = new CandyLoggerUI();
     } else if (!this.isBrowser && this.useInteractiveUI) {
       // Node.js with interactive TUI - load async
@@ -77,26 +80,23 @@ class CandyLogger {
 
   private async initTerminalUI(): Promise<void> {
     try {
-      // Suppress any console output during initialization
-      const originalWrite = process.stdout.write.bind(process.stdout);
-      const originalErrWrite = process.stderr.write.bind(process.stderr);
-      
-      // Temporarily suppress stdout/stderr
-      process.stdout.write = () => true;
-      process.stderr.write = () => true;
+      // Clear screen before initializing
+      if (process.stdout.isTTY) {
+        process.stdout.write('\x1b[2J\x1b[H\x1b[?25l');
+      }
       
       if (!CandyTerminalUI) {
         const module = await import('./terminal-ui.js');
         CandyTerminalUI = module.CandyTerminalUI;
       }
-      this.terminalUI = new CandyTerminalUI();
       
-      // Wait a bit for blessed to fully initialize
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Restore stdout/stderr but redirect to blessed screen
-      process.stdout.write = originalWrite;
-      process.stderr.write = originalErrWrite;
+      // Only create if not already created
+      if (!this.terminalUI) {
+        this.terminalUI = new CandyTerminalUI();
+        
+        // Wait for blessed to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
     } catch (error) {
       // Fallback to regular mode if terminal UI fails to load
       this.printNodeWelcome();
@@ -322,6 +322,8 @@ export function createInteractiveLogger(): CandyLogger {
  * Override global console to use candy-logger
  * Call this once in your app entry point to intercept all console calls
  * @param options - Configuration options
+ * @param options.interactive - Enable interactive terminal UI (Node.js only)
+ * @param options.forceUI - Force UI to show even in production (browser only)
  * @returns The candy logger instance
  * 
  * @example
@@ -329,12 +331,15 @@ export function createInteractiveLogger(): CandyLogger {
  * import { overrideConsole } from 'candy-logger';
  * overrideConsole();
  * 
+ * // Force UI to show in production
+ * overrideConsole({ forceUI: true });
+ * 
  * // Now all console calls use candy-logger
  * console.log('Hello'); // Uses candy-logger
  * console.info('Info'); // Uses candy-logger
  */
-export function overrideConsole(options: { interactive?: boolean } = {}): CandyLogger {
-  const logger = options.interactive ? new CandyLogger({ interactive: true }) : (candy || new CandyLogger());
+export function overrideConsole(options: { interactive?: boolean; forceUI?: boolean } = {}): CandyLogger {
+  const logger = candy || new CandyLogger(options);
   
   // Store original console methods
   const originalConsole = {
