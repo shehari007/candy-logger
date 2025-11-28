@@ -218,7 +218,13 @@ candy.log('Hello', { typed: true });
 
 ## 📋 Changelog
 
-### v1.0.3 (Latest)
+### v1.0.4 (Latest)
+
+**🔧 Critical Bug Fix:**
+- Fixed constructor singleton bug in `overrideConsole()` that prevented `forceUI: true` from working properly
+- Now correctly creates new logger instances with provided options instead of reusing singleton
+
+### v1.0.3
 
 **🆕 New Features:**
 - 📁 **Project Structure** - Organized demo files and documentation

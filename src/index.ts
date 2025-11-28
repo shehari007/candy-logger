@@ -339,7 +339,8 @@ export function createInteractiveLogger(): CandyLogger {
  * console.info('Info'); // Uses candy-logger
  */
 export function overrideConsole(options: { interactive?: boolean; forceUI?: boolean } = {}): CandyLogger {
-  const logger = candy || new CandyLogger(options);
+  // Always create a new logger with the provided options instead of using singleton
+  const logger = new CandyLogger(options);
   
   // Store original console methods
   const originalConsole = {
