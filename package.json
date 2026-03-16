@@ -1,7 +1,7 @@
 {
   "name": "candy-logger",
-  "version": "1.0.4",
-  "description": "A beautiful popup logger that displays console messages in a floating, minimizable box",
+  "version": "2.0.0",
+  "description": "A beautiful browser-based logger with table view UI, tags, colors, action buttons, and dark/light themes",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,14 +17,28 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
-    "release:patch": "npm version patch && npm publish"
+    "release:patch": "npm version patch && npm publish",
+    "release:minor": "npm version minor && npm publish",
+    "release:major": "npm version major && npm publish"
   },
   "keywords": [
     "logger",
     "console",
-    "popup",
+    "browser",
     "debug",
-    "logging"
+    "logging",
+    "table",
+    "tags",
+    "ui",
+    "devtools",
+    "developer-tools",
+    "popup",
+    "overlay",
+    "dark-mode",
+    "react",
+    "vue",
+    "angular",
+    "svelte"
   ],
   "author": "Muhammad Sheharyar Butt",
   "repository": {
@@ -33,21 +47,7 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "@types/blessed": "^0.1.25",
-    "@types/node": "^20.10.0",
     "typescript": "^5.3.3"
-  },
-  "dependencies": {
-    "blessed": "^0.1.81"
-  },
-  "peerDependenciesMeta": {
-    "blessed": {
-      "optional": true
-    }
-  },
-  "browser": {
-    "blessed": false,
-    "./dist/terminal-ui.js": false
   },
   "files": [
     "dist"

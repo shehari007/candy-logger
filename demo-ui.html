@@ -1,262 +1,114 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🍬 Candy Logger - Demo</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 20px;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            min-height: 100vh;
-        }
-
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-        }
-
-        h1 {
-            color: #667eea;
-            text-align: center;
-            margin-bottom: 10px;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 18px;
-        }
-
-        .feature-highlight {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-
-        .buttons {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin-bottom: 20px;
-        }
-
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
-        }
-
-        .info {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 20px;
-        }
-
-        .info h3 {
-            margin-top: 0;
-            color: #495057;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🍬 Candy Logger v2 – Live Demo</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter','Segoe UI',system-ui,sans-serif;background:linear-gradient(135deg,#0f0f17 0%,#1a1b26 100%);color:#c0caf5;min-height:100vh;padding:40px 24px 120px}
+    .container{max-width:720px;margin:0 auto}
+    h1{font-size:2rem;text-align:center;background:linear-gradient(135deg,#7aa2f7,#bb9af7,#f7768e);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
+    .subtitle{text-align:center;color:#565f89;margin-bottom:32px;font-size:14px}
+    .subtitle a{color:#7aa2f7;text-decoration:none}
+    .section{background:#1a1b26;border:1px solid #292e42;border-radius:12px;padding:20px;margin-bottom:16px}
+    .section h3{font-size:13px;color:#7aa2f7;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
+    .btns{display:flex;flex-wrap:wrap;gap:8px}
+    .b{padding:9px 16px;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;transition:transform .12s,box-shadow .12s;color:#fff}
+    .b:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.35)}
+    .b1{background:#3b82f6}.b2{background:#06b6d4}.b3{background:#8b5cf6}.b4{background:#22c55e}
+    .b5{background:#f59e0b;color:#000}.b6{background:#ef4444}.b7{background:#ec4899}.b8{background:#64748b}
+    .links{display:flex;gap:16px;justify-content:center;margin-top:24px;font-size:13px}
+    .links a{color:#7aa2f7;text-decoration:none;padding:6px 14px;background:#16161e;border:1px solid #292e42;border-radius:8px;transition:background .15s}
+    .links a:hover{background:#1e2030}
+  </style>
 </head>
-
 <body>
-    <div class="container">
-        <h1>🍬 Candy Logger</h1>
-        <p class="subtitle">Testing the latest dist build with production bypass</p>
+  <div class="container">
+    <h1>🍬 Candy Logger v2</h1>
+    <p class="subtitle">Browser-based table logger &middot; Pin logs, add tags, expand objects full-width</p>
 
-        <div class="feature-highlight">
-            <strong>🔧 forceUI: true</strong> - Logger UI now shows in ANY environment!<br>
-            Look for the resizable candy logger in the bottom-right corner 👉
-        </div>
-
-        <div class="buttons">
-            <button onclick="testLogs()">📝 Add Test Logs</button>
-            <!-- <button onclick="testBase64()">📄 Test Long String</button> -->
-            <button onclick="testSearch()">🔍 Add Many Logs</button>
-            <!-- <button onclick="testResizing()">📐 Test Resizing</button> -->
-            <!-- <button onclick="testAllFeatures()">✨ Test All Features</button> -->
-        </div>
-
-        <div class="info">
-            <h3>🎯 How to Test:</h3>
-            <ul>
-                <li><strong>Resize:</strong> Drag the bottom-right corner of the logger</li>
-                <li><strong>Pin:</strong> Click 📌 to keep logger always visible</li>
-                <li><strong>Search:</strong> Type in the search box to filter logs</li>
-                <li><strong>Filter:</strong> Click 🔍 to filter by log type</li>
-                <li><strong>Copy:</strong> Use copy buttons to copy JSON data</li>
-                <li><strong>Minimize:</strong> Click − to collapse the logger</li>
-            </ul>
-        </div>
-
-        <div class="info">
-            <h3>📦 Installation & Links:</h3>
-            <ul>
-                <li><strong>GitHub:</strong> <a href="https://github.com/shehari007/candy-logger" target="_blank"
-                        style="color: #667eea;">View Repository</a></li>
-                <li><strong>NPM Package:</strong> <a href="https://www.npmjs.com/package/candy-logger" target="_blank"
-                        style="color: #667eea;">View Package</a></li>
-                <li><strong>Install Command:</strong> <code
-                        style="background: #f8f9fa; padding: 2px 6px; border-radius: 4px; font-family: monospace;">npm install candy-logger</code>
-                </li>
-                <li><strong>Usage:</strong> <code
-                        style="background: #f8f9fa; padding: 2px 6px; border-radius: 4px; font-family: monospace;">import { overrideConsole } from 'candy-logger';</code>
-                </li>
-                <li><strong>Force UI:</strong> <code
-                        style="background: #f8f9fa; padding: 2px 6px; border-radius: 4px; font-family: monospace;">overrideConsole({ forceUI: true });</code>
-                </li>
-            </ul>
-        </div>
+    <div class="section">
+      <h3>📊 Log Levels</h3>
+      <div class="btns">
+        <button class="b b1" onclick="candy.log('Hello World!')">Log</button>
+        <button class="b b2" onclick="candy.info('Connection established')">Info</button>
+        <button class="b b3" onclick="candy.debug('Render cycle: 12ms')">Debug</button>
+        <button class="b b4" onclick="candy.success('Build passed!')">Success</button>
+        <button class="b b5" onclick="candy.warn('Disk usage > 90%')">Warn</button>
+        <button class="b b6" onclick="candy.error('TypeError: x is not a function')">Error</button>
+      </div>
     </div>
 
-    <script type="module">
-        // Import from unpkg CDN (latest version)
-        import { overrideConsole } from 'https://unpkg.com/candy-logger@latest/dist/index.js';
-        // For local testing, comment above and uncomment below:
-        // import { overrideConsole } from './dist/index.js';
-
-        // Override console with forceUI to bypass development check
-        const logger = overrideConsole({ forceUI: true });
-        console.log('✅ Candy Logger initialized with forceUI from unpkg!');
-
-        // Make functions available globally for the buttons
-        window.overrideConsole = overrideConsole;
-        window.candyLogger = logger;
-    </script>
-    <script>
-
-        function testLogs() {
-            console.log('Hello World!');
-            console.info('Info message', { user: 'John', id: 123 });
-            console.warn('Warning message');
-            console.error('Error message');
-
-            console.log('Object:', {
-                name: 'Test',
-                nested: {
-                    value: 42,
-                    array: [1, 2, 3, 4, 5]
-                }
-            });
-        }
-
-        function testBase64() {
-            // Simulate a very long base64 string (like from an image)
-            const longBase64 = 'data:image/png;base64,' + 'A'.repeat(50000);
-
-            console.log('Testing long base64:', {
-                image: longBase64,
-                name: 'test-image.png',
-                size: '50KB'
-            });
-
-            console.info('Long string test passed! UI should not freeze.');
-        }
-
-        function testSearch() {
-            const types = ['user', 'product', 'order', 'payment', 'shipping'];
-            const actions = ['created', 'updated', 'deleted', 'fetched', 'validated'];
-
-            for (let i = 0; i < 20; i++) {
-                const type = types[Math.floor(Math.random() * types.length)];
-                const action = actions[Math.floor(Math.random() * actions.length)];
-
-                if (i % 4 === 0) {
-                    console.log(`${type} ${action}`, { id: i, timestamp: new Date() });
-                } else if (i % 4 === 1) {
-                    console.info(`${type} ${action} successfully`);
-                } else if (i % 4 === 2) {
-                    console.warn(`${type} ${action} with warnings`);
-                } else {
-                    console.error(`${type} ${action} failed`);
-                }
-            }
-
-            console.info('Try searching for "user", "created", "error", etc. in the search box!');
-        }
-
-        function testResizing() {
-            console.info('📐 Resizing Guide:', {
-                'How to Resize': 'Drag the bottom-right corner of the candy logger',
-                'Min Size': '300px × 200px',
-                'Max Size': '800px × 80% viewport height',
-                'Tip': 'The resize handle (⋰) is visible in the corner'
-            });
-            console.warn('⚠️ Try making it very small, then very large!');
-            console.error('❌ This is just a test error for the resize demo');
-        }
-
-        function testAllFeatures() {
-            console.log('🚀 Testing all Candy Logger features...');
-
-            // Test different log types
-            console.log('📝 Regular log message');
-            console.info('ℹ️ Info message with data', { timestamp: new Date(), user: 'tester' });
-            console.warn('⚠️ Warning message');
-            console.error('❌ Error message');
-
-            // Test complex objects
-            console.log('🎯 Complex Object:', {
-                user: {
-                    name: 'John Doe',
-                    email: 'john@example.com',
-                    settings: {
-                        theme: 'dark',
-                        notifications: true,
-                        preferences: ['email', 'push', 'sms']
-                    }
-                },
-                metadata: {
-                    version: '1.0.1',
-                    features: ['forceUI', 'resize', 'search', 'filters'],
-                    performance: { loadTime: '150ms', memoryUsage: '2.3MB' }
-                }
-            });
-
-            // Test arrays
-            console.info('📋 Array Test:', [1, 'two', { three: 3 }, [4, 5, 6]]);
-
-            console.log('✅ All features tested! Try the UI controls now.');
-        }
-
-        // Add initial logs
-        console.log('🍬 Candy Logger UI loaded with forceUI!');
-        console.info('🎯 Preview Features:', {
-            '🔧 forceUI': 'Bypasses development/production check - works anywhere!',
-            '📐 Resizable': 'Drag bottom-right corner to resize',
-            '📌 Pin Toggle': 'Keep logger always visible',
-            '🔍 Search & Filter': 'Real-time log filtering',
-            '📋 Copy Functions': 'Copy JSON data easily',
-            '⚡ Performance': 'Handles long strings without freezing'
-        });
-        console.log('✨ Ready for testing! Use the buttons above.');
-    </script>
+    <div class="section">
+      <h3>🏷️ Tags</h3>
+      <p style="color:#565f89;font-size:12px;margin-bottom:10px">Programmatic tags — or click 🏷️ on any row to add tags manually</p>
+      <div class="btns">
+        <button class="b b7" onclick="tagAuth()">Auth</button>
+        <button class="b b7" onclick="tagAPI()">API</button>
+        <button class="b b7" onclick="tagDB()">DB + Slow</button>
+        <button class="b b7" onclick="tagPerf()">Perf</button>
+      </div>
     </div>
+
+    <div class="section">
+      <h3>📦 Objects &amp; Arrays</h3>
+      <p style="color:#565f89;font-size:12px;margin-bottom:10px">Click ▼ to expand — expands full-width across the entire row</p>
+      <div class="btns">
+        <button class="b b3" onclick="logUser()">User Object</button>
+        <button class="b b3" onclick="logApiRes()">API Response</button>
+        <button class="b b3" onclick="logBigArray()">Array(50)</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>📌 Pin &amp; Persist</h3>
+      <p style="color:#565f89;font-size:12px;margin-bottom:10px">Pin a log row → stays at top + survives page reload (localStorage)</p>
+      <div class="btns">
+        <button class="b b5" onclick="candy.info('📌 Pin me! Click the pin button on this row →')">Log &amp; Pin</button>
+        <button class="b b8" onclick="localStorage.removeItem('candy-logger-pins-v2')">Clear Pins</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>⚡ Stress</h3>
+      <div class="btns">
+        <button class="b b8" onclick="spam(25)">25 logs</button>
+        <button class="b b8" onclick="spam(100)">100 logs</button>
+      </div>
+    </div>
+
+    <div class="links">
+      <a href="https://github.com/shehari007/candy-logger" target="_blank">GitHub</a>
+      <a href="https://www.npmjs.com/package/candy-logger" target="_blank">NPM</a>
+    </div>
+  </div>
+
+  <script type="module">
+    import { overrideConsole } from 'https://unpkg.com/candy-logger@latest/dist/index.js';
+
+    const logger = overrideConsole({ forceUI: true, theme: 'dark' });
+    window.candy = logger;
+
+    window.tagAuth = () => logger.tagged({ label: 'AUTH', bg: 'rgba(139,92,246,.2)', color: '#a78bfa' }, 'info', 'Token refreshed', { expiresIn: '1h' });
+    window.tagAPI  = () => logger.tagged({ label: 'API', bg: 'rgba(6,182,212,.2)', color: '#22d3ee' }, 'log', 'GET /api/users 200 OK (32ms)');
+    window.tagDB   = () => logger.tagged([
+      { label: 'DB', bg: 'rgba(234,179,8,.18)', color: '#eab308' },
+      { label: 'SLOW', bg: 'rgba(239,68,68,.18)', color: '#f87171' }
+    ], 'warn', 'Query took 2.4s', { query: 'SELECT * FROM orders' });
+    window.tagPerf = () => logger.tagged({ label: 'PERF', bg: 'rgba(34,197,94,.18)', color: '#4ade80' }, 'debug', 'LCP 1.1s · FID 38ms · CLS 0.01');
+
+    window.logUser = () => candy.log('User:', { name: 'Jane Doe', email: 'jane@example.com', role: 'admin', settings: { theme: 'dark', notifications: true } });
+    window.logApiRes = () => candy.info('Response:', { status: 'ok', data: { users: [{ id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }], total: 42 }, meta: { ms: 120 } });
+    window.logBigArray = () => candy.log('Array:', Array.from({ length: 50 }, (_, i) => ({ id: i + 1, val: +(Math.random() * 100).toFixed(2) })));
+
+    window.spam = (n) => {
+      const lvls = ['log','info','debug','success','warn','error'];
+      for (let i = 0; i < n; i++) candy[lvls[i % lvls.length]](`[${i + 1}/${n}] Sample log`);
+    };
+
+    candy.success('🍬 Candy Logger v2 ready!');
+    candy.info('Click the buttons to test features');
+  </script>
 </body>
-
 </html>

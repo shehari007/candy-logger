@@ -1,24 +1,30 @@
-# 🍬 Candy Logger
+# 🍬 Candy Logger v2
 
-A beautiful, lightweight logging library for JavaScript/TypeScript with an elegant popup UI for browser and enhanced terminal output for Node.js.
+A professional, zero-dependency browser logger with a **table-view UI**, tags, color-coded levels, action buttons, dark/light themes, and JSON export — all in one floating panel.
 
 ## 🚀 [Live Demo](https://candy-logger.msyb.dev)
 
-Try the interactive demo to see all features in action!
+> **v2 Breaking Change** — Node.js / terminal support has been removed. Candy Logger is now **browser-only**. If you need the legacy terminal output, stay on `v1.x`.
+
+---
 
 ## ✨ Features
 
-- 🎨 **Beautiful Browser UI** - Floating, draggable popup logger (dev mode only)
-- 📐 **Resizable UI** - Drag corners to resize the logger (300px-800px × 200px-80vh)
-- 🔧 **Force UI Mode** - Show UI in any environment with `forceUI: true`
-- 🖥️ **Enhanced Terminal Output** - Colorful, formatted logs in Node.js
-- 🔍 **Filter by Level** - Filter logs by type (log, info, warn, error)
-- 🔎 **Search Logs** - Real-time log search functionality
-- 📋 **Copy to Clipboard** - Easy JSON copying
-- 📌 **Pin UI** - Keep the logger visible or auto-fade
-- 🎯 **Zero Config** - Works out of the box
-- 🚀 **Lightweight** - Minimal performance impact
-- 🌐 **Universal** - Works in browser and Node.js
+| Feature | Description |
+|---------|-------------|
+| 📊 **Table View** | Logs displayed in a structured table (Time, Level, Tags, Message, Actions) |
+| 🏷️ **Tags** | Attach custom colored tags (e.g. `AUTH`, `API`, `DB`, `PERF`) to any log |
+| 🎨 **6 Log Levels** | `log` · `info` · `debug` · `success` · `warn` · `error` — each color-coded |
+| ⚡ **Action Buttons** | Copy, bookmark, delete per row — plus custom actions via config |
+| 🌗 **Dark / Light** | Toggle themes on the fly with one-click switch |
+| 🔍 **Search & Filter** | Real-time search + filter by level with live counts |
+| 💾 **Export** | Download all logs as a `.json` file |
+| 📌 **Pin, Drag, Resize** | Pin to stay visible, drag anywhere, resize from corner |
+| 📦 **Collapsible JSON** | Large objects auto-collapse with preview; syntax-highlighted |
+| 🚀 **Zero Config** | One line to start; just set `forceUI: true` |
+| 🪶 **Zero Dependencies** | No runtime deps — just your browser |
+
+---
 
 ## 📦 Installation
 
@@ -26,237 +32,247 @@ Try the interactive demo to see all features in action!
 npm install candy-logger
 ```
 
+Or via CDN:
+
+```html
+<script type="module">
+  import { overrideConsole } from 'https://unpkg.com/candy-logger@latest/dist/index.js';
+  overrideConsole({ forceUI: true });
+</script>
+```
+
+---
+
 ## 🚀 Quick Start
 
-### Browser (React, Vue, Angular, etc.)
+### Option 1 — Override Console (Recommended)
 
-**Option 1: Override Console (Recommended)**
+Call once in your entry file. Every `console.log/info/warn/error/debug` is automatically captured.
 
-All your existing `console.log/info/warn/error` will automatically use Candy Logger:
-
-```javascript
+```js
 import { overrideConsole } from 'candy-logger';
 
-// Call once in your app entry point (e.g., index.js or App.jsx)
-overrideConsole();
+overrideConsole({ forceUI: true });
 
-// Now use console normally - it's automatically enhanced!
+// That's it — use console as usual
 console.log('Hello World!');
-console.info('User logged in', { userId: 123 });
-console.warn('Low memory');
-console.error('API failed', errorObject);
+console.info('User signed in', { userId: 123 });
+console.warn('Disk usage > 90%');
+console.error('Payment failed', { code: 'CARD_DECLINED' });
+console.debug('Render took 12ms');
 ```
 
-**Option 2: Use Directly**
+### Option 2 — Direct API
 
-```javascript
+```js
 import candy from 'candy-logger';
 
-candy.log('Application started');
-candy.info('User data', { name: 'John', age: 30 });
-candy.warn('Warning message');
-candy.error('Error occurred', error);
+candy.log('App started');
+candy.info('Config loaded', config);
+candy.debug('Cache hit', { key });
+candy.success('Build passed!');
+candy.warn('Rate limit close');
+candy.error('Uncaught', err);
 ```
 
-### React Example
+---
 
-```jsx
-// src/index.js or src/main.jsx
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+## 🏷️ Tagged Logging
+
+Attach one or more tags to any log for easy categorization and filtering.
+
+```js
 import { overrideConsole } from 'candy-logger';
-import App from './App';
+const candy = overrideConsole({ forceUI: true });
 
-// Initialize candy logger once
-overrideConsole();
-
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+// Single tag
+candy.tagged(
+  { label: 'AUTH', bg: 'rgba(139,92,246,.2)', color: '#a78bfa' },
+  'info',
+  'Token refreshed',
+  { expiresIn: '1h' }
 );
 
-// Now use console anywhere in your app
-function MyComponent() {
-  const handleClick = () => {
-    console.log('Button clicked!');
-    console.info('User action', { action: 'click', button: 'submit' });
-  };
-
-  return <button onClick={handleClick}>Click Me</button>;
-}
+// Multiple tags
+candy.tagged(
+  [
+    { label: 'DB', bg: 'rgba(234,179,8,.18)', color: '#eab308' },
+    { label: 'SLOW', bg: 'rgba(239,68,68,.18)', color: '#f87171' }
+  ],
+  'warn',
+  'Query took 3.1s',
+  { query: 'SELECT * FROM orders' }
+);
 ```
 
-### Node.js / Express Server
+---
 
-```javascript
-const express = require('express');
-const { overrideConsole } = require('candy-logger');
+## ⚙️ Configuration
 
-// Enable in development only
-if (process.env.NODE_ENV !== 'production') {
-  overrideConsole();
-}
-
-const app = express();
-
-app.get('/', (req, res) => {
-  console.log('Request received');
-  console.info('Request details', { method: req.method, path: req.path });
-  res.send('Hello World');
-});
-
-app.listen(3000, () => {
-  console.log('Server running on port 3000');
+```js
+overrideConsole({
+  forceUI: true,               // Show UI even in production
+  theme: 'dark',               // 'dark' | 'light' | 'auto'
+  position: 'bottom-right',    // 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'full-bottom'
+  maxLogs: 500,                // Max logs in memory (oldest removed first)
+  collapsed: false,            // Start minimized
+  defaultTags: [               // Tags applied to every log
+    { label: 'v2.0', color: '#7aa2f7' }
+  ],
+  badgeText: 'DEV',            // Optional badge next to title
 });
 ```
 
-### Node.js Scripts (Interactive Terminal UI)
+---
 
-For standalone scripts, you can use the interactive terminal UI:
+## 🖼️ Framework Examples
 
-```javascript
-import { createInteractiveLogger } from 'candy-logger';
+### React
 
-const logger = createInteractiveLogger();
+```jsx
+// src/main.jsx
+import { overrideConsole } from 'candy-logger';
+overrideConsole({ forceUI: true });
 
-logger.log('Processing data...');
-logger.info('Progress', { completed: 50, total: 100 });
-logger.warn('High memory usage');
-logger.error('Failed to process item', errorDetails);
-
-// Interactive features:
-// - Mouse: Click filter buttons, scroll with wheel
-// - Keys: ↑↓ to navigate, Enter to expand/collapse, 1-5 to filter, C to clear, Q to quit
+// Now use console.log anywhere — it's enhanced!
+function App() {
+  return <button onClick={() => console.log('Clicked!')}>Click</button>;
+}
 ```
 
-## 🎨 UI Features
+### Vue
 
-### Browser UI
-- **Auto-fade** - UI fades when not hovering (pin to keep visible)
-- **Draggable** - Move the logger anywhere on screen
-- **Minimizable** - Collapse to save space
-- **Filters** - Show only specific log types
-- **Search** - Find logs instantly
-- **JSON Formatting** - Auto-formatted with syntax highlighting
-- **Copy Buttons** - Copy JSON with one click
+```js
+// main.js
+import { createApp } from 'vue';
+import { overrideConsole } from 'candy-logger';
+import App from './App.vue';
 
-### Terminal UI
-- **Color-coded** - Different colors for each log level
-- **Timestamps** - Automatic timestamps on all logs
-- **JSON Formatting** - Pretty-printed JSON objects
-- **Interactive Mode** - Full-featured TUI for scripts
+overrideConsole({ forceUI: true });
+createApp(App).mount('#app');
+```
+
+### Angular
+
+```ts
+// main.ts
+import { overrideConsole } from 'candy-logger';
+overrideConsole({ forceUI: true });
+platformBrowserDynamic().bootstrapModule(AppModule);
+```
+
+### Svelte
+
+```svelte
+<script>
+  import { onMount } from 'svelte';
+  import { overrideConsole } from 'candy-logger';
+  const candy = overrideConsole({ forceUI: true });
+
+  onMount(() => candy.success('Ready!'));
+</script>
+```
+
+### Next.js (client only)
+
+```tsx
+'use client';
+import { useEffect } from 'react';
+import { overrideConsole } from 'candy-logger';
+
+export default function Providers({ children }) {
+  useEffect(() => { overrideConsole({ forceUI: true }); }, []);
+  return <>{children}</>;
+}
+```
+
+---
 
 ## 🎯 API
 
-### Methods
+### Log Methods
 
-```javascript
-candy.log(...args)      // Blue - General logging
-candy.info(...args)     // Cyan - Informational messages
-candy.warn(...args)     // Yellow - Warnings
-candy.error(...args)    // Red - Errors
-candy.getStats()        // Get log counts
-candy.printStats()      // Print statistics (Node.js only)
+```js
+candy.log(...args)      // 📝 General log (blue)
+candy.info(...args)     // ℹ️  Informational (cyan)
+candy.debug(...args)    // 🐛 Debug (purple)
+candy.success(...args)  // ✅ Success (green)
+candy.warn(...args)     // ⚠️  Warning (amber)
+candy.error(...args)    // ❌ Error (red)
+```
+
+### Tagged Logging
+
+```js
+candy.tagged(tag | tag[], level, ...args)
 ```
 
 ### Console Override
 
-```javascript
+```js
 import { overrideConsole, restoreConsole } from 'candy-logger';
 
-// Override console
-const logger = overrideConsole();
+const logger = overrideConsole(options);
 
-// Your code here...
-console.log('This uses candy logger');
+// ... your code ...
 
-// Restore original console
-restoreConsole(logger);
+restoreConsole(logger); // Restore original console
 ```
 
-## 🔧 Configuration
+### Utilities
 
-### Development vs Production
-
-The browser UI **automatically disables in production**:
-- Only shows on `localhost`, `127.0.0.1`, or when `NODE_ENV !== 'production'`
-- Zero overhead in production builds
-- Logs still work but go to regular console
-
-### Interactive Mode (Node.js only)
-
-```javascript
-// For servers - DO NOT use interactive mode
-overrideConsole(); // ✅ Good
-
-// For standalone scripts - use interactive mode
-createInteractiveLogger(); // ✅ Good for scripts
+```js
+candy.getStats()   // { all: 10, log: 3, info: 2, ... }
+candy.getLogs()    // LogEntry[]
 ```
 
-⚠️ **Never use interactive mode in servers** - it creates a full-screen UI that blocks your application.
+---
 
-## 📝 TypeScript Support
+## 🔧 Showing the UI
 
-Fully typed with TypeScript definitions included:
+The UI is **opt-in** — set `forceUI: true` to display it:
 
-```typescript
-import candy, { overrideConsole, createInteractiveLogger } from 'candy-logger';
-
-// All methods are fully typed
-candy.log('Hello', { typed: true });
+```js
+overrideConsole({ forceUI: true });
 ```
 
-## 🌟 Why Candy Logger?
+- When `forceUI` is omitted or `false`, logs pass through to the native console with zero overhead
+- Works on any domain — localhost, staging, production
 
-- ✅ **Zero configuration** - Just import and use
-- ✅ **Non-intrusive** - Doesn't interfere with your code
-- ✅ **Production-safe** - UI auto-disables in production
-- ✅ **Beautiful output** - Makes debugging enjoyable
-- ✅ **Framework agnostic** - Works with React, Vue, Angular, Express, etc.
-- ✅ **Lightweight** - Minimal bundle size impact
+---
+
+## 📝 TypeScript
+
+Fully typed. All interfaces are exported:
+
+```ts
+import type { LogLevel, LogEntry, LogTag, LogAction, CandyLoggerOptions } from 'candy-logger';
+```
+
+---
 
 ## 📋 Changelog
 
-### v1.0.4 (Latest)
+### v2.0.0
 
-**🔧 Critical Bug Fix:**
-- Fixed constructor singleton bug in `overrideConsole()` that prevented `forceUI: true` from working properly
-- Now correctly creates new logger instances with provided options instead of reusing singleton
+**🔥 Complete Rewrite — Browser Only**
 
-### v1.0.3
+- Removed all Node.js / terminal support (blessed dependency dropped)
+- New **table-view UI** replacing the old list view
+- **6 log levels**: added `debug` and `success`
+- **Tagged logging** with custom colors
+- **Action buttons** per row: copy, bookmark, delete
+- **Dark / Light** themes with one-click toggle
+- **Export logs** as JSON
+- **Configurable position**, max logs, default tags, badge text
+- Zero runtime dependencies
+- Full TypeScript rewrite with exported types
 
-**🆕 New Features:**
-- 📁 **Project Structure** - Organized demo files and documentation
+### v1.x (Deprecated)
 
-**🔧 Bug Fixes:**
-- Fixed directory structure and file organization
-- Improved demo page styling and functionality
-- Enhanced documentation with demo link
+Legacy version with Node.js terminal support and list-based browser UI. Install `candy-logger@1` if you need it.
 
-### v1.0.2
-
-**🆕 New Features:**
-- 📐 **Resizable UI** - Drag the bottom-right corner to resize the candy logger (300px-800px width, 200px-80vh height)
-- 🔧 **Force UI Mode** - New `forceUI` option to bypass development-only restriction
-- ⋰ **Resize Handle** - Visual resize indicator in the bottom-right corner
-
-**✨ Enhancements:**
-- Dynamic height adjustment when resizing
-- Improved minimize behavior (title bar only)
-- Better text alignment in search input
-- Clean minimized state without background overflow
-
-**Usage:**
-```javascript
-// Force UI to show in any environment (including production)
-overrideConsole({ forceUI: true });
-
-// The logger UI is now fully resizable - just drag the corner!
-```
-
-### v1.0.1
-- Initial stable release with browser UI and terminal features
+---
 
 ## 📄 License
 
@@ -264,12 +280,8 @@ MIT
 
 ## 🤝 Contributing
 
-Contributions are welcome! Feel free to open issues or submit PRs.
-
-## 📧 Support
-
-If you encounter any issues or have questions, please open an issue on GitHub.
+Contributions are welcome! Open an issue or submit a PR.
 
 ---
 
-Made with 🍬 by shehari007
+Made with 🍬 by [shehari007](https://github.com/shehari007)
