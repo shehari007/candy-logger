@@ -1,139 +1,280 @@
-import { LogLevel, LogEntry, LogTag, LogAction, CandyLoggerOptions, PanelPosition, PanelTheme } from './types.js';
+import type {
+  CandyLoggerOptions,
+  LogAction,
+  LogEntry,
+  LogLevel,
+  LogTag,
+  MessagePart,
+  PanelPosition,
+  PanelTheme,
+} from './core/types.js';
+import { LOG_LEVELS, isLogLevel } from './core/types.js';
+import type { LogStore, StoreEvent } from './core/store.js';
+import { previewOf, safeStringify, tokenizeJson } from './core/serialize.js';
+import { CANDY_CSS } from './styles.js';
 
-let _idCounter = 0;
-const PINNED_KEY = 'candy-logger-pins-v2';
+const STYLE_ID = 'candy-logger-styles-v21';
+const PINNED_KEY = 'candy-logger-pins-v21';
+const UI_STATE_KEY = 'candy-logger-ui-v21';
+const MAX_PIN_BYTES = 64 * 1024;
+
+/** Only these CSS properties may come from log data (`%c` payloads, tag colors). */
+const STYLE_ALLOWLIST = new Set([
+  'color',
+  'background',
+  'background-color',
+  'font-weight',
+  'font-style',
+  'font-size',
+  'font-family',
+  'text-decoration',
+  'text-transform',
+  'padding',
+  'border',
+  'border-radius',
+  'opacity',
+]);
 
 interface StoredPin {
-  id: string;
   level: LogLevel;
   message: string;
   timestamp: string;
-  args: any[];
   tags?: LogTag[];
 }
 
+let styleRefCount = 0;
+
+/** Escape an id for use inside an attribute selector, without depending on CSS.escape. */
+function cssEsc(value: string): string {
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+function supportsStyle(prop: string, value: string): boolean {
+  if (!STYLE_ALLOWLIST.has(prop)) return false;
+  try {
+    return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' ? CSS.supports(prop, value) : false;
+  } catch {
+    return false;
+  }
+}
+
+function applySafeStyle(el: HTMLElement, style: Record<string, string> | undefined): void {
+  if (!style) return;
+  for (const [prop, value] of Object.entries(style)) {
+    if (supportsStyle(prop, value)) el.style.setProperty(prop, value);
+  }
+}
+
+function looksLikeError(v: unknown): v is { name: string; message: string; stack?: string[] } {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof (v as any).name === 'string' &&
+    typeof (v as any).message === 'string' &&
+    (Array.isArray((v as any).stack) || (v as any).stack === undefined)
+  );
+}
+
 export class CandyLoggerUI {
+  private store: LogStore;
+  private options: Required<
+    Pick<CandyLoggerOptions, 'position' | 'maxLogs' | 'showTimestamp' | 'collapsed' | 'tags' | 'dimWhenIdle' | 'persistPins'>
+  > &
+    CandyLoggerOptions;
+  private customActions: LogAction[];
+
   private container: HTMLDivElement | null = null;
   private tableBody: HTMLTableSectionElement | null = null;
   private pinnedBody: HTMLTableSectionElement | null = null;
-  private isMinimized = false;
-  private isDragging = false;
-  private dragOffset = { x: 0, y: 0 };
-  private currentFilter: LogLevel | 'all' = 'all';
-  private logCounts: Record<string, number> = { all: 0, log: 0, info: 0, warn: 0, error: 0, debug: 0, success: 0 };
-  private searchTerm = '';
-  private isPanelPinned = false;
-  private logs: LogEntry[] = [];
-  private originalValues = new Map<string, any>();
-  private jsonHtmlMap = new Map<string, string>();
-  private options: CandyLoggerOptions;
-  private customActions: LogAction[];
-  private theme: PanelTheme;
-  private pinnedLogIds = new Set<string>();
+  private wrapEl: HTMLElement | null = null;
+  private emptyEl: HTMLElement | null = null;
+  private counterEl: HTMLElement | null = null;
+  private newPillEl: HTMLButtonElement | null = null;
+  private countEls = new Map<string, HTMLElement>();
+  private rows = new Map<string, HTMLTableRowElement>();
 
-  constructor(options: CandyLoggerOptions = {}) {
+  private abort = new AbortController();
+  private mql: MediaQueryList | null = null;
+  private themeSetting: PanelTheme;
+  private resolvedTheme: 'light' | 'dark';
+
+  private isMinimized = false;
+  private isPanelPinned = false;
+  private currentFilter: LogLevel | 'all' = 'all';
+  private searchTerm = '';
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private stickToBottom = true;
+  private unseen = 0;
+  private dragPointerId: number | null = null;
+  private dragOffset = { x: 0, y: 0 };
+  private unsubscribe: (() => void) | null = null;
+  private destroyed = false;
+
+  constructor(store: LogStore, options: CandyLoggerOptions = {}) {
+    this.store = store;
     this.options = {
       position: 'bottom-right',
       theme: 'dark',
       maxLogs: 500,
-      tableView: true,
       showTimestamp: true,
       collapsed: false,
       tags: true,
+      dimWhenIdle: false,
+      persistPins: true,
       ...options,
     };
     this.customActions = options.actions || [];
-    this.theme = this.options.theme === 'auto' ? 'dark' : (this.options.theme || 'dark');
-    if (typeof window !== 'undefined') this.init();
+    this.themeSetting = this.options.theme || 'dark';
+    this.resolvedTheme = this.resolveTheme(this.themeSetting);
+
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') this.init();
   }
 
-  /* ================================================================ */
-  /*  Initialisation                                                   */
-  /* ================================================================ */
+  /* ============================== lifecycle ============================== */
+
+  private resolveTheme(setting: PanelTheme): 'light' | 'dark' {
+    if (setting === 'light' || setting === 'dark') return setting;
+    try {
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  }
 
   private init(): void {
-    this.container = document.createElement('div');
-    this.container.className = `candy-logger candy-logger--${this.theme}`;
-    this.applyPosition(this.options.position || 'bottom-right');
+    this.injectStyles();
+
+    const el = document.createElement('div');
+    el.className = `candy-logger candy-logger--${this.resolvedTheme}`;
+    if (this.options.dimWhenIdle) el.classList.add('candy-logger--dim');
+    el.setAttribute('role', 'complementary');
+    el.setAttribute('aria-label', 'Candy Logger panel');
+    this.container = el;
+    this.applyPosition(this.options.position);
 
     if (this.options.collapsed) {
-      this.container.classList.add('candy-logger--minimized');
+      el.classList.add('candy-logger--minimized');
       this.isMinimized = true;
     }
 
-    this.container.innerHTML = this.buildHTML();
-    this.tableBody = this.container.querySelector('.candy-table-body') as HTMLTableSectionElement;
-    this.pinnedBody = this.container.querySelector('.candy-pinned-body') as HTMLTableSectionElement;
-
-    this.injectStyles();
+    this.buildSkeleton();
+    this.cacheNodes();
     this.attachEvents();
-    this.registerGlobalHelpers();
-    this.loadPinnedFromStorage();
+    this.watchSystemTheme();
 
-    const append = () => document.body.appendChild(this.container!);
+    const append = () => {
+      if (!this.destroyed && this.container) document.body.appendChild(this.container);
+    };
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', append);
+      document.addEventListener('DOMContentLoaded', append, { once: true, signal: this.abort.signal });
     } else {
       append();
     }
+
+    this.loadPinnedFromStorage();
+    this.unsubscribe = this.store.subscribe((e) => this.onStoreEvent(e));
+    // Backfill anything logged before the panel attached (the UI loads lazily).
+    for (const entry of this.store.all()) this.insertRow(entry, this.store.isPinned(entry.id));
+    this.refreshCounts();
   }
 
-  /* ================================================================ */
-  /*  HTML skeleton                                                    */
-  /* ================================================================ */
-
-  private buildHTML(): string {
-    const badge = this.options.badgeText
-      ? `<span class="candy-badge">${this.escapeHtml(this.options.badgeText)}</span>`
-      : '';
-    return `
-      <div class="candy-header">
-        <div class="candy-header-left">
-          <span class="candy-title">🍬 Candy Logger</span>
-          ${badge}
-          <span class="candy-log-counter" title="Total logs">0</span>
-        </div>
-        <div class="candy-header-right">
-          <button class="candy-hbtn" data-action="theme" title="Switch to ${this.theme === 'dark' ? 'light' : 'dark'} theme">${this.theme === 'dark' ? '☀️' : '🌙'}</button>
-          <button class="candy-hbtn" data-action="pin" title="Pin panel (keep visible)">📌</button>
-          <button class="candy-hbtn" data-action="export" title="Export logs as JSON">💾</button>
-          <button class="candy-hbtn" data-action="clear" title="Clear all logs">🗑️</button>
-          <button class="candy-hbtn" data-action="minimize" title="Minimize panel">−</button>
-        </div>
-      </div>
-      <div class="candy-toolbar">
-        <div class="candy-filters">${this.buildFilterButtons()}</div>
-        <div class="candy-search-wrap">
-          <input type="text" class="candy-search" placeholder="Search logs…" spellcheck="false" />
-        </div>
-      </div>
-      <div class="candy-body">
-        <div class="candy-table-wrap">
-          <table class="candy-table">
-            <thead>
-              <tr>
-                <th class="candy-th candy-th--time">Time</th>
-                <th class="candy-th candy-th--level">Level</th>
-                <th class="candy-th candy-th--tags">Tags</th>
-                <th class="candy-th candy-th--message">Message</th>
-                <th class="candy-th candy-th--actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="candy-pinned-body"></tbody>
-            <tbody class="candy-table-body"></tbody>
-          </table>
-        </div>
-        <div class="candy-empty">
-          <div class="candy-empty-icon">🍬</div>
-          <div class="candy-empty-title">No logs yet</div>
-          <div class="candy-empty-sub">Start logging to see entries here</div>
-        </div>
-      </div>
-    `;
+  /** Removes the panel, every listener, and the stylesheet. Safe to call twice. */
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.abort.abort();
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.mql = null;
+    this.container?.remove();
+    this.container = null;
+    this.rows.clear();
+    this.countEls.clear();
+    styleRefCount = Math.max(0, styleRefCount - 1);
+    if (styleRefCount === 0) document.getElementById(STYLE_ID)?.remove();
   }
 
-  private buildFilterButtons(): string {
-    const f: { level: LogLevel | 'all'; label: string; icon: string }[] = [
+  private injectStyles(): void {
+    styleRefCount++;
+    if (document.getElementById(STYLE_ID)) return;
+    const s = document.createElement('style');
+    s.id = STYLE_ID;
+    s.textContent = CANDY_CSS;
+    document.head.appendChild(s);
+  }
+
+  private watchSystemTheme(): void {
+    if (this.themeSetting !== 'auto' || typeof window.matchMedia !== 'function') return;
+    try {
+      this.mql = window.matchMedia('(prefers-color-scheme: light)');
+      this.mql.addEventListener(
+        'change',
+        () => {
+          if (this.themeSetting === 'auto') this.setTheme(this.resolveTheme('auto'));
+        },
+        { signal: this.abort.signal },
+      );
+    } catch {
+      /* older browsers */
+    }
+  }
+
+  /* ============================== skeleton ============================== */
+
+  private get columnCount(): number {
+    return 3 + (this.options.showTimestamp ? 1 : 0) + (this.options.tags ? 1 : 0);
+  }
+
+  private buildSkeleton(): void {
+    const el = this.container!;
+    const h = (tag: string, cls?: string, text?: string) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const iconBtn = (action: string, glyph: string, label: string) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'candy-hbtn';
+      b.dataset.act = action;
+      b.setAttribute('aria-label', label);
+      b.title = label;
+      const g = h('span', undefined, glyph);
+      g.setAttribute('aria-hidden', 'true');
+      b.appendChild(g);
+      return b;
+    };
+
+    /* header */
+    const header = h('div', 'candy-header');
+    const left = h('div', 'candy-header-left');
+    left.appendChild(h('span', 'candy-title', '🍬 Candy Logger'));
+    if (this.options.badgeText) left.appendChild(h('span', 'candy-badge', this.options.badgeText));
+    const counter = h('span', 'candy-log-counter', '0');
+    counter.setAttribute('aria-label', 'Total logs');
+    left.appendChild(counter);
+
+    const right = h('div', 'candy-header-right');
+    right.appendChild(iconBtn('theme', this.resolvedTheme === 'dark' ? '☀️' : '🌙', 'Switch color theme'));
+    const pinBtn = iconBtn('pin', '📌', 'Keep panel fully visible');
+    pinBtn.setAttribute('aria-pressed', 'false');
+    right.appendChild(pinBtn);
+    right.appendChild(iconBtn('export', '💾', 'Export logs as JSON'));
+    right.appendChild(iconBtn('copy-all', '📋', 'Copy all logs to clipboard'));
+    right.appendChild(iconBtn('clear', '🗑️', 'Clear logs (pinned rows are kept)'));
+    const minBtn = iconBtn('minimize', '−', 'Minimize panel');
+    minBtn.setAttribute('aria-expanded', String(!this.options.collapsed));
+    right.appendChild(minBtn);
+    header.append(left, right);
+
+    /* toolbar */
+    const toolbar = h('div', 'candy-toolbar');
+    const filters = h('div', 'candy-filters');
+    filters.setAttribute('role', 'group');
+    filters.setAttribute('aria-label', 'Filter by level');
+    const defs: { level: LogLevel | 'all'; label: string; icon: string }[] = [
       { level: 'all', label: 'All', icon: '📊' },
       { level: 'log', label: 'Log', icon: '📝' },
       { level: 'info', label: 'Info', icon: 'ℹ️' },
@@ -142,783 +283,854 @@ export class CandyLoggerUI {
       { level: 'warn', label: 'Warn', icon: '⚠️' },
       { level: 'error', label: 'Error', icon: '❌' },
     ];
-    return f
-      .map(
-        (x) =>
-          `<button class="candy-fbtn${x.level === 'all' ? ' candy-fbtn--active' : ''}" data-level="${x.level}">${x.icon} ${x.label} <span class="candy-fcount">0</span></button>`,
-      )
-      .join('');
+    for (const d of defs) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'candy-fbtn' + (d.level === 'all' ? ' candy-fbtn--active' : '');
+      b.dataset.level = d.level;
+      b.setAttribute('aria-pressed', String(d.level === 'all'));
+      const icon = h('span', undefined, d.icon);
+      icon.setAttribute('aria-hidden', 'true');
+      const count = h('span', 'candy-fcount', '0');
+      b.append(icon, document.createTextNode(' ' + d.label + ' '), count);
+      filters.appendChild(b);
+    }
+    const searchWrap = h('div', 'candy-search-wrap');
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'candy-search';
+    search.placeholder = 'Search logs…';
+    search.spellcheck = false;
+    search.setAttribute('aria-label', 'Search logs');
+    searchWrap.appendChild(search);
+    toolbar.append(filters, searchWrap);
+
+    /* body */
+    const body = h('div', 'candy-body');
+    const wrap = h('div', 'candy-table-wrap');
+    const table = document.createElement('table');
+    table.className = 'candy-table';
+    const thead = document.createElement('thead');
+    const hrow = document.createElement('tr');
+    const th = (cls: string, text: string) => {
+      const n = document.createElement('th');
+      n.className = `candy-th ${cls}`;
+      n.scope = 'col';
+      n.textContent = text;
+      return n;
+    };
+    if (this.options.showTimestamp) hrow.appendChild(th('candy-th--time', 'Time'));
+    hrow.appendChild(th('candy-th--level', 'Level'));
+    if (this.options.tags) hrow.appendChild(th('candy-th--tags', 'Tags'));
+    hrow.appendChild(th('candy-th--message', 'Message'));
+    hrow.appendChild(th('candy-th--actions', 'Actions'));
+    thead.appendChild(hrow);
+    const pinnedBody = document.createElement('tbody');
+    pinnedBody.className = 'candy-pinned-body';
+    const tableBody = document.createElement('tbody');
+    tableBody.className = 'candy-table-body';
+    tableBody.setAttribute('aria-live', 'polite');
+    tableBody.setAttribute('aria-relevant', 'additions');
+    table.append(thead, pinnedBody, tableBody);
+    wrap.appendChild(table);
+
+    const empty = h('div', 'candy-empty');
+    const icon = h('div', 'candy-empty-icon', '🍬');
+    icon.setAttribute('aria-hidden', 'true');
+    empty.append(icon, h('div', 'candy-empty-title', 'No logs yet'), h('div', 'candy-empty-sub', 'Start logging to see entries here'));
+
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'candy-newpill candy-newpill--hidden';
+    pill.dataset.act = 'scroll-bottom';
+    pill.textContent = '↓ new logs';
+    this.newPillEl = pill;
+
+    body.append(wrap, empty, pill);
+    el.append(header, toolbar, body);
   }
 
-  /* ================================================================ */
-  /*  Position                                                         */
-  /* ================================================================ */
+  private cacheNodes(): void {
+    const el = this.container!;
+    this.tableBody = el.querySelector('.candy-table-body');
+    this.pinnedBody = el.querySelector('.candy-pinned-body');
+    this.wrapEl = el.querySelector('.candy-table-wrap');
+    this.emptyEl = el.querySelector('.candy-empty');
+    this.counterEl = el.querySelector('.candy-log-counter');
+    for (const b of el.querySelectorAll<HTMLElement>('.candy-fbtn')) {
+      const c = b.querySelector<HTMLElement>('.candy-fcount');
+      if (c && b.dataset.level) this.countEls.set(b.dataset.level, c);
+    }
+  }
 
   private applyPosition(pos: PanelPosition): void {
-    if (!this.container) return;
-    const s = this.container.style;
+    const s = this.container!.style;
     s.top = s.bottom = s.left = s.right = '';
-    s.width = '';
-    s.maxWidth = '';
-    s.borderRadius = '';
+    s.width = s.maxWidth = s.borderRadius = '';
     switch (pos) {
-      case 'bottom-right':  s.bottom = '16px'; s.right = '16px'; break;
-      case 'bottom-left':   s.bottom = '16px'; s.left = '16px'; break;
-      case 'top-right':     s.top = '16px'; s.right = '16px'; break;
-      case 'top-left':      s.top = '16px'; s.left = '16px'; break;
-      case 'full-bottom':   s.bottom = '0'; s.left = '0'; s.right = '0'; s.width = '100%'; s.maxWidth = '100%'; s.borderRadius = '12px 12px 0 0'; break;
+      case 'bottom-left':
+        s.bottom = '16px';
+        s.left = '16px';
+        break;
+      case 'top-right':
+        s.top = '16px';
+        s.right = '16px';
+        break;
+      case 'top-left':
+        s.top = '16px';
+        s.left = '16px';
+        break;
+      case 'full-bottom':
+        s.bottom = '0';
+        s.left = '0';
+        s.right = '0';
+        s.width = '100%';
+        s.maxWidth = '100%';
+        s.borderRadius = '12px 12px 0 0';
+        break;
+      default:
+        s.bottom = '16px';
+        s.right = '16px';
     }
   }
 
-  /* ================================================================ */
-  /*  Styles                                                           */
-  /* ================================================================ */
-
-  private injectStyles(): void {
-    if (document.getElementById('candy-logger-v2-styles')) return;
-    const s = document.createElement('style');
-    s.id = 'candy-logger-v2-styles';
-    s.textContent = this.getCSS();
-    document.head.appendChild(s);
-  }
-
-  private getCSS(): string {
-    return `
-/* ========= Candy Logger v2 – Table UI ========= */
-.candy-logger{position:fixed;width:700px;min-width:420px;max-width:95vw;height:500px;min-height:200px;max-height:85vh;display:flex;flex-direction:column;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.32);font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;z-index:999999;opacity:.12;transition:opacity .25s ease,box-shadow .25s ease;resize:both;overflow:hidden}
-.candy-logger:hover,.candy-logger.candy-logger--pinned{opacity:1}
-.candy-logger.candy-logger--minimized{height:auto!important;min-height:auto!important;max-height:none!important;resize:none}
-.candy-logger.candy-logger--minimized .candy-toolbar,.candy-logger.candy-logger--minimized .candy-body{display:none!important}
-
-/* ── Dark theme ── */
-.candy-logger--dark{background:#1a1b26;color:#c0caf5;border:1px solid #292e42}
-.candy-logger--dark .candy-header{background:#16161e;border-bottom:1px solid #292e42}
-.candy-logger--dark .candy-toolbar{background:#1a1b26;border-bottom:1px solid #292e42}
-.candy-logger--dark .candy-body{background:#1a1b26}
-.candy-logger--dark .candy-table-wrap{background:#1a1b26}
-.candy-logger--dark .candy-th{background:#16161e;color:#565f89;border-bottom:2px solid #292e42}
-.candy-logger--dark .candy-tr{border-bottom:1px solid #292e42}
-.candy-logger--dark .candy-tr:hover{background:#1e2030}
-.candy-logger--dark .candy-td{color:#c0caf5}
-.candy-logger--dark .candy-search{background:#16161e;color:#c0caf5;border:1px solid #292e42}
-.candy-logger--dark .candy-search:focus{border-color:#7aa2f7;box-shadow:0 0 0 2px rgba(122,162,247,.2)}
-.candy-logger--dark .candy-search::placeholder{color:#565f89}
-.candy-logger--dark .candy-fbtn{background:#16161e;color:#565f89;border:1px solid #292e42}
-.candy-logger--dark .candy-fbtn:hover{background:#1e2030;color:#c0caf5}
-.candy-logger--dark .candy-fbtn--active{background:#7aa2f7;color:#1a1b26;border-color:#7aa2f7}
-.candy-logger--dark .candy-empty{color:#565f89}
-.candy-logger--dark .candy-json-pre{background:#16161e;border:1px solid #292e42;color:#c0caf5}
-.candy-logger--dark .candy-json-key{color:#7aa2f7}
-.candy-logger--dark .candy-json-string{color:#9ece6a}
-.candy-logger--dark .candy-json-number{color:#ff9e64}
-.candy-logger--dark .candy-json-boolean{color:#bb9af7}
-.candy-logger--dark .candy-json-null{color:#565f89}
-.candy-logger--dark .candy-abtn--copy{background:rgba(122,162,247,.12);color:#7aa2f7}
-.candy-logger--dark .candy-abtn--copy:hover{background:rgba(122,162,247,.28)}
-.candy-logger--dark .candy-abtn--pin{background:rgba(224,175,104,.12);color:#e0af68}
-.candy-logger--dark .candy-abtn--pin:hover,.candy-logger--dark .candy-abtn--pin.active{background:rgba(224,175,104,.28);color:#e0af68}
-.candy-logger--dark .candy-abtn--tag{background:rgba(187,154,247,.12);color:#bb9af7}
-.candy-logger--dark .candy-abtn--tag:hover{background:rgba(187,154,247,.28)}
-.candy-logger--dark .candy-abtn--del{background:rgba(247,118,142,.10);color:#f7768e}
-.candy-logger--dark .candy-abtn--del:hover{background:rgba(247,118,142,.25)}
-.candy-logger--dark .candy-tag-input input{background:#16161e;color:#c0caf5;border-color:#292e42}
-.candy-logger--dark .candy-tag-input input:focus{border-color:#bb9af7}
-.candy-logger--dark .candy-copy-btn{background:rgba(122,162,247,.15);color:#7aa2f7}
-.candy-logger--dark .candy-copy-btn:hover{background:rgba(122,162,247,.3)}
-.candy-logger--dark .candy-log-counter{background:rgba(255,255,255,.08);color:#c0caf5}
-
-/* ── Light theme ── */
-.candy-logger--light{background:#ffffff;color:#1e293b;border:1px solid #e2e8f0}
-.candy-logger--light .candy-header{background:#f8fafc;border-bottom:1px solid #e2e8f0;color:#1e293b}
-.candy-logger--light .candy-toolbar{background:#ffffff;border-bottom:1px solid #e2e8f0}
-.candy-logger--light .candy-body{background:#ffffff}
-.candy-logger--light .candy-table-wrap{background:#ffffff}
-.candy-logger--light .candy-th{background:#f8fafc;color:#64748b;border-bottom:2px solid #e2e8f0}
-.candy-logger--light .candy-tr{border-bottom:1px solid #f1f5f9}
-.candy-logger--light .candy-tr:hover{background:#f8fafc}
-.candy-logger--light .candy-td{color:#1e293b}
-.candy-logger--light .candy-td--time{color:#64748b}
-.candy-logger--light .candy-search{background:#f8fafc;color:#1e293b;border:1px solid #e2e8f0}
-.candy-logger--light .candy-search:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
-.candy-logger--light .candy-search::placeholder{color:#94a3b8}
-.candy-logger--light .candy-fbtn{background:#f8fafc;color:#64748b;border:1px solid #e2e8f0}
-.candy-logger--light .candy-fbtn:hover{background:#f1f5f9;color:#1e293b}
-.candy-logger--light .candy-fbtn--active{background:#6366f1;color:#fff;border-color:#6366f1}
-.candy-logger--light .candy-empty{color:#94a3b8}
-.candy-logger--light .candy-json-pre{background:#f8fafc;border:1px solid #e2e8f0;color:#1e293b}
-.candy-logger--light .candy-json-key{color:#6366f1}
-.candy-logger--light .candy-json-string{color:#059669}
-.candy-logger--light .candy-json-number{color:#d97706}
-.candy-logger--light .candy-json-boolean{color:#8b5cf6}
-.candy-logger--light .candy-json-null{color:#94a3b8}
-.candy-logger--light .candy-abtn--copy{background:rgba(59,130,246,.10);color:#2563eb}
-.candy-logger--light .candy-abtn--copy:hover{background:rgba(59,130,246,.20)}
-.candy-logger--light .candy-abtn--pin{background:rgba(217,119,6,.10);color:#b45309}
-.candy-logger--light .candy-abtn--pin:hover,.candy-logger--light .candy-abtn--pin.active{background:rgba(217,119,6,.22);color:#92400e}
-.candy-logger--light .candy-abtn--tag{background:rgba(139,92,246,.10);color:#7c3aed}
-.candy-logger--light .candy-abtn--tag:hover{background:rgba(139,92,246,.20)}
-.candy-logger--light .candy-abtn--del{background:rgba(239,68,68,.08);color:#dc2626}
-.candy-logger--light .candy-abtn--del:hover{background:rgba(239,68,68,.18)}
-.candy-logger--light .candy-tag-input input{background:#f8fafc;color:#1e293b;border-color:#e2e8f0}
-.candy-logger--light .candy-tag-input input:focus{border-color:#8b5cf6}
-.candy-logger--light .candy-copy-btn{background:rgba(99,102,241,.12);color:#4f46e5}
-.candy-logger--light .candy-copy-btn:hover{background:rgba(99,102,241,.22)}
-.candy-logger--light .candy-log-counter{background:rgba(0,0,0,.06);color:#475569}
-.candy-logger--light .candy-title{color:#1e293b}
-.candy-logger--light .candy-hbtn{color:#475569}
-.candy-logger--light .candy-hbtn:hover{background:rgba(0,0,0,.06)}
-.candy-logger--light .candy-hbtn.active{background:rgba(99,102,241,.15)}
-.candy-logger--light .candy-badge{background:#6366f1;color:#fff}
-
-/* ── Header ── */
-.candy-header{padding:10px 14px;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;border-radius:12px 12px 0 0;flex-shrink:0}
-.candy-header-left{display:flex;align-items:center;gap:8px}
-.candy-title{font-weight:700;font-size:13px;letter-spacing:-.3px}
-.candy-badge{font-size:10px;padding:2px 7px;border-radius:10px;background:#7aa2f7;color:#1a1b26;font-weight:600}
-.candy-log-counter{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;min-width:18px;text-align:center}
-.candy-header-right{display:flex;gap:4px}
-.candy-hbtn{background:none;border:none;color:inherit;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;transition:background .15s}
-.candy-hbtn:hover{background:rgba(255,255,255,.12)}
-.candy-hbtn.active{background:rgba(122,162,247,.25)}
-
-/* ── Toolbar ── */
-.candy-toolbar{padding:8px 12px;display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap}
-.candy-filters{display:flex;gap:4px;flex-wrap:wrap;flex:1}
-.candy-fbtn{padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:500;transition:all .15s;white-space:nowrap;border:1px solid transparent;background:none}
-.candy-fcount{opacity:.6;font-size:10px;margin-left:2px}
-.candy-search-wrap{flex:0 0 180px}
-.candy-search{width:100%;padding:6px 10px;border-radius:6px;font-size:12px;outline:none;transition:all .2s;box-sizing:border-box}
-
-/* ── Body / Table ── */
-.candy-body{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;border-radius:0 0 12px 12px;position:relative}
-.candy-table-wrap{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0}
-.candy-table-wrap::-webkit-scrollbar{width:5px}
-.candy-table-wrap::-webkit-scrollbar-track{background:transparent}
-.candy-table-wrap::-webkit-scrollbar-thumb{background:rgba(128,128,128,.3);border-radius:3px}
-.candy-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
-.candy-th{padding:6px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;z-index:2}
-.candy-th--time{width:72px}
-.candy-th--level{width:68px}
-.candy-th--tags{width:110px}
-.candy-th--message{width:auto}
-.candy-th--actions{width:160px}
-
-/* ── Table rows ── */
-.candy-tr{transition:background .1s;animation:candy-fadeIn .2s ease}
-@keyframes candy-fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.candy-tr.candy-tr--hidden{display:none}
-.candy-td{padding:6px 10px;vertical-align:top;font-size:12px;line-height:1.5}
-.candy-td--time{font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:11px;opacity:.6;white-space:nowrap}
-.candy-td--level{white-space:nowrap}
-.candy-td--message{font-family:'SF Mono','Cascadia Code','Fira Code',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0}
-.candy-td--message:hover{white-space:normal;overflow:visible;word-break:break-word}
-.candy-td--actions{white-space:nowrap}
-
-/* ── Pinned rows ── */
-.candy-tr--pinned{border-left:3px solid #e0af68!important}
-.candy-logger--dark .candy-tr--pinned{background:rgba(224,175,104,.05)}
-.candy-logger--light .candy-tr--pinned{background:rgba(217,119,6,.04)}
-.candy-pinned-body .candy-tr:last-child{border-bottom:2px solid rgba(224,175,104,.3)}
-
-/* ── Level badges ── */
-.candy-level{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
-.candy-level--log{background:rgba(122,162,247,.15);color:#7aa2f7}
-.candy-level--info{background:rgba(125,211,252,.15);color:#7dcfff}
-.candy-level--debug{background:rgba(187,154,247,.15);color:#bb9af7}
-.candy-level--success{background:rgba(158,206,106,.15);color:#9ece6a}
-.candy-level--warn{background:rgba(224,175,104,.15);color:#e0af68}
-.candy-level--error{background:rgba(247,118,142,.15);color:#f7768e}
-
-/* ── Tags ── */
-.candy-tag{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:600;margin-right:3px;margin-bottom:2px;white-space:nowrap}
-
-/* ── Action buttons (colorful) ── */
-.candy-abtn{border:none;cursor:pointer;font-size:12px;padding:3px 7px;border-radius:5px;transition:all .15s;font-weight:500;display:inline-flex;align-items:center;gap:3px;vertical-align:middle;margin-right:3px;line-height:1}
-
-/* ── Tag inline input ── */
-.candy-tag-input{display:inline-flex;align-items:center;gap:4px;margin-left:2px;animation:candy-fadeIn .15s ease}
-.candy-tag-input input{width:80px;padding:3px 7px;border-radius:5px;font-size:11px;outline:none;font-family:inherit}
-
-/* ── Detail row (full-width JSON expansion) ── */
-.candy-detail-row{animation:candy-fadeIn .15s ease}
-.candy-detail-row td{padding:2px 14px 12px!important}
-.candy-detail-row .candy-json-pre{margin:0;max-height:420px;overflow:auto}
-
-/* ── JSON formatting ── */
-.candy-json-toggle{cursor:pointer;user-select:none;margin-right:4px;font-size:10px;display:inline-block;transition:transform .15s;opacity:.5}
-.candy-json-toggle:hover{opacity:1}
-.candy-json-toggle.collapsed{transform:rotate(-90deg)}
-.candy-json-pre{padding:8px 10px;border-radius:6px;font-size:11px;line-height:1.5;overflow-x:auto;margin:4px 0;font-family:'SF Mono','Cascadia Code','Fira Code',monospace;white-space:pre-wrap;word-break:break-word}
-.candy-json-pre--inline{margin:2px 0;padding:4px 8px;display:inline-block;max-width:100%}
-.candy-json-preview{opacity:.5;font-style:italic;font-size:11px;cursor:pointer}
-.candy-json-preview:hover{opacity:.8}
-.candy-copy-row{display:flex;gap:4px;margin-top:6px}
-.candy-copy-btn{padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;border:none;font-weight:600;transition:all .15s}
-.candy-truncated{color:#e0af68;font-size:10px;font-style:italic}
-
-/* ── Empty state ── */
-.candy-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
-.candy-empty.hidden{display:none}
-.candy-empty-icon{font-size:40px;margin-bottom:8px;animation:candy-bounce 2s infinite}
-@keyframes candy-bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
-.candy-empty-title{font-size:15px;font-weight:600;margin-bottom:4px}
-.candy-empty-sub{font-size:12px;opacity:.6}
-
-/* ── Resize handle ── */
-.candy-logger::after{content:"⋮⋮";position:absolute;bottom:3px;right:6px;font-size:10px;opacity:.25;pointer-events:none;letter-spacing:2px}
-    `;
-  }
-
-  /* ================================================================ */
-  /*  Events                                                           */
-  /* ================================================================ */
+  /* ============================== events ============================== */
 
   private attachEvents(): void {
-    if (!this.container) return;
+    const el = this.container!;
+    const signal = this.abort.signal;
 
-    this.container.querySelectorAll('.candy-hbtn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        switch ((btn as HTMLElement).dataset.action) {
-          case 'minimize': this.toggleMinimize(); break;
-          case 'clear':    this.clearLogs(); break;
-          case 'pin':      this.togglePanelPin(); break;
-          case 'theme':    this.cycleTheme(); break;
-          case 'export':   this.exportLogs(); break;
+    // ONE delegated listener. No inline handlers, so the panel works under
+    // `script-src 'self'`, and no `window.__candy*` globals are needed.
+    el.addEventListener(
+      'click',
+      (ev) => {
+        const target = ev.target as HTMLElement | null;
+        const btn = target?.closest<HTMLElement>('[data-act]');
+        if (btn && el.contains(btn)) {
+          ev.stopPropagation();
+          this.handleAction(btn.dataset.act!, btn);
+          return;
         }
-      });
-    });
+        const fbtn = target?.closest<HTMLElement>('.candy-fbtn');
+        if (fbtn && el.contains(fbtn)) {
+          ev.stopPropagation();
+          this.setFilter((fbtn.dataset.level || 'all') as LogLevel | 'all');
+        }
+      },
+      { signal },
+    );
 
-    this.container.querySelectorAll('.candy-fbtn').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const level = (btn as HTMLElement).dataset.level as LogLevel | 'all';
-        this.setFilter(level);
-        this.container!.querySelectorAll('.candy-fbtn').forEach((b) => b.classList.remove('candy-fbtn--active'));
-        btn.classList.add('candy-fbtn--active');
-      });
-    });
+    const search = el.querySelector<HTMLInputElement>('.candy-search')!;
+    search.addEventListener(
+      'input',
+      () => {
+        if (this.searchTimer) clearTimeout(this.searchTimer);
+        this.searchTimer = setTimeout(() => {
+          this.searchTerm = search.value.trim().toLowerCase();
+          this.applyFilters();
+        }, 120);
+      },
+      { signal },
+    );
 
-    const search = this.container.querySelector('.candy-search') as HTMLInputElement;
-    if (search) {
-      search.addEventListener('input', () => {
-        this.searchTerm = search.value.toLowerCase();
-        this.applyFilters();
+    this.wrapEl?.addEventListener(
+      'scroll',
+      () => {
+        const w = this.wrapEl!;
+        this.stickToBottom = w.scrollHeight - w.scrollTop - w.clientHeight < 40;
+        if (this.stickToBottom) this.clearUnseen();
+      },
+      { signal, passive: true },
+    );
+
+    // Pointer events cover mouse, touch and pen in one path, and pointer capture
+    // means the drag survives leaving the header.
+    const header = el.querySelector<HTMLElement>('.candy-header')!;
+    header.addEventListener(
+      'pointerdown',
+      (e) => {
+        if ((e.target as HTMLElement).closest('.candy-hbtn')) return;
+        e.preventDefault(); // stop the host page's text selection
+        this.dragPointerId = e.pointerId;
+        header.setPointerCapture(e.pointerId);
+        const r = el.getBoundingClientRect();
+        this.dragOffset = { x: e.clientX - r.left, y: e.clientY - r.top };
+      },
+      { signal },
+    );
+    header.addEventListener(
+      'pointermove',
+      (e) => {
+        if (this.dragPointerId !== e.pointerId || !this.container) return;
+        const r = this.container.getBoundingClientRect();
+        // Always leave a grabbable strip of the header on screen.
+        const left = Math.min(Math.max(e.clientX - this.dragOffset.x, 80 - r.width), window.innerWidth - 80);
+        const top = Math.min(Math.max(e.clientY - this.dragOffset.y, 0), window.innerHeight - 36);
+        Object.assign(this.container.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto' });
+      },
+      { signal },
+    );
+    const endDrag = (e: PointerEvent) => {
+      if (this.dragPointerId === e.pointerId) {
+        try {
+          header.releasePointerCapture(e.pointerId);
+        } catch {
+          /* already released */
+        }
+        this.dragPointerId = null;
+      }
+    };
+    header.addEventListener('pointerup', endDrag, { signal });
+    header.addEventListener('pointercancel', endDrag, { signal });
+  }
+
+  private handleAction(act: string, btn: HTMLElement): void {
+    const id = btn.dataset.id || btn.closest<HTMLElement>('tr')?.dataset.id || '';
+    switch (act) {
+      case 'minimize':
+        this.toggleMinimize();
+        break;
+      case 'clear':
+        this.store.clear();
+        break;
+      case 'pin':
+        this.togglePanelPin(btn);
+        break;
+      case 'theme':
+        this.cycleTheme();
+        break;
+      case 'export':
+        this.exportLogs();
+        break;
+      case 'copy-all':
+        this.copyAll(btn);
+        break;
+      case 'scroll-bottom':
+        this.scrollToBottom();
+        break;
+      case 'row-pin':
+        if (this.store.isPinned(id)) this.store.unpin(id);
+        else if (!this.store.pin(id)) this.flash(btn, '✕');
+        break;
+      case 'row-del':
+        this.store.remove(id);
+        break;
+      case 'row-copy':
+        this.copyText(this.store.get(id)?.message ?? '', btn);
+        break;
+      case 'row-tag':
+        this.showTagInput(id, btn);
+        break;
+      case 'row-toggle':
+        this.toggleDetail(id, btn);
+        break;
+      case 'custom': {
+        const action = this.customActions[Number(btn.dataset.index)];
+        const entry = this.store.get(id);
+        // Index-based dispatch: a label can never be parsed as code, and
+        // duplicate labels no longer collide.
+        if (action && entry) {
+          try {
+            action.onClick(entry);
+          } catch {
+            /* a custom action must not break the panel */
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  /* ============================== store sync ============================== */
+
+  private onStoreEvent(e: StoreEvent): void {
+    if (this.destroyed) return;
+    switch (e.type) {
+      case 'add':
+        this.insertRow(e.entry, this.store.isPinned(e.entry.id));
+        this.refreshCounts();
+        if (this.stickToBottom) this.scrollToBottom();
+        else this.bumpUnseen();
+        break;
+      case 'evict':
+      case 'remove':
+        this.dropRow(e.id);
+        this.refreshCounts();
+        break;
+      case 'pin':
+      case 'unpin':
+        this.relocateRow(e.id);
+        this.savePinnedToStorage();
+        break;
+      case 'update':
+        this.rebuildRow(e.entry);
+        break;
+      case 'clear':
+        this.rebuildAll();
+        break;
+    }
+  }
+
+  private rebuildAll(): void {
+    if (!this.tableBody || !this.pinnedBody) return;
+    this.tableBody.replaceChildren();
+    this.pinnedBody.replaceChildren();
+    this.rows.clear();
+    for (const entry of this.store.all()) this.insertRow(entry, this.store.isPinned(entry.id));
+    this.refreshCounts();
+    this.savePinnedToStorage();
+  }
+
+  private dropRow(id: string): void {
+    this.rows.get(id)?.remove();
+    this.rows.delete(id);
+    this.container?.querySelector(`tr.candy-detail-row[data-detail-for="${cssEsc(id)}"]`)?.remove();
+  }
+
+  private rebuildRow(entry: LogEntry): void {
+    const old = this.rows.get(entry.id);
+    if (!old) return;
+    const next = this.createRow(entry, this.store.isPinned(entry.id));
+    old.replaceWith(next);
+    this.rows.set(entry.id, next);
+  }
+
+  private relocateRow(id: string): void {
+    const entry = this.store.get(id);
+    if (!entry) return;
+    this.dropRow(id);
+    this.insertRow(entry, this.store.isPinned(id));
+  }
+
+  private insertRow(entry: LogEntry, pinned: boolean): void {
+    if (!this.tableBody || !this.pinnedBody || this.rows.has(entry.id)) return;
+    const row = this.createRow(entry, pinned);
+    (pinned ? this.pinnedBody : this.tableBody).appendChild(row);
+    this.rows.set(entry.id, row);
+    this.updateEmptyState();
+  }
+
+  /* ============================== rows ============================== */
+
+  private createRow(entry: LogEntry, pinned: boolean): HTMLTableRowElement {
+    const row = document.createElement('tr');
+    row.className = 'candy-tr' + (pinned ? ' candy-tr--pinned' : '');
+    row.dataset.level = entry.level;
+    row.dataset.id = entry.id;
+
+    const td = (cls: string) => {
+      const n = document.createElement('td');
+      n.className = `candy-td ${cls}`;
+      return n;
+    };
+
+    if (this.options.showTimestamp) {
+      const t = td('candy-td--time');
+      t.textContent = entry.timestamp.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
       });
+      t.title = entry.timestamp.toISOString();
+      row.appendChild(t);
     }
 
-    const header = this.container.querySelector('.candy-header') as HTMLElement;
-    header.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('.candy-hbtn')) return;
-      this.isDragging = true;
-      const rect = this.container!.getBoundingClientRect();
-      this.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!this.isDragging || !this.container) return;
-      this.container.style.left = `${e.clientX - this.dragOffset.x}px`;
-      this.container.style.top = `${e.clientY - this.dragOffset.y}px`;
-      this.container.style.right = 'auto';
-      this.container.style.bottom = 'auto';
-    });
-    document.addEventListener('mouseup', () => { this.isDragging = false; });
+    const lvl = td('candy-td--level');
+    const badge = document.createElement('span');
+    // Whitelisted, so a level from JS callers or storage can never reach the class attribute raw.
+    const safeLevel: LogLevel = isLogLevel(entry.level) ? entry.level : 'log';
+    badge.className = `candy-level candy-level--${safeLevel}`;
+    badge.textContent = safeLevel.toUpperCase();
+    lvl.appendChild(badge);
+    row.appendChild(lvl);
+
+    if (this.options.tags) {
+      const tags = td('candy-td--tags');
+      this.renderTags(tags, entry.tags);
+      row.appendChild(tags);
+    }
+
+    const msg = td('candy-td--message');
+    this.renderMessage(msg, entry);
+    row.appendChild(msg);
+
+    const actions = td('candy-td--actions');
+    this.renderActions(actions, entry, pinned);
+    row.appendChild(actions);
+
+    if (!this.matches(entry)) row.classList.add('candy-tr--hidden');
+    return row;
   }
 
-  /* ================================================================ */
-  /*  Global helpers (for onclick in generated HTML)                    */
-  /* ================================================================ */
+  private renderTags(cell: HTMLElement, tags?: LogTag[]): void {
+    cell.replaceChildren();
+    if (!tags || tags.length === 0) {
+      const dash = document.createElement('span');
+      dash.className = 'candy-dash';
+      dash.textContent = '—';
+      cell.appendChild(dash);
+      return;
+    }
+    for (const t of tags) {
+      const el = document.createElement('span');
+      el.className = 'candy-tag';
+      el.textContent = String(t?.label ?? ''); // textContent: markup in a label is text, never nodes
+      // Colors go through CSSOM with a property allowlist — they can never
+      // terminate the attribute and inject an event handler.
+      applySafeStyle(el, { ...(t?.bg ? { 'background-color': t.bg } : {}), ...(t?.color ? { color: t.color } : {}) });
+      cell.appendChild(el);
+    }
+  }
 
-  private registerGlobalHelpers(): void {
-    if (typeof window === 'undefined') return;
-    (window as any).__candyUI = this;
+  private renderMessage(cell: HTMLElement, entry: LogEntry): void {
+    cell.replaceChildren();
+    // When format specifiers were used, `parts` already holds the substituted (and
+    // `%c`-styled) text — rendering args separately would show the raw template.
+    if (entry.formatted && entry.parts?.length) {
+      for (const part of entry.parts) cell.appendChild(this.renderPart(part));
+      return;
+    }
+    const snapshot = entry.snapshot.length ? entry.snapshot : [entry.message];
+    snapshot.forEach((value, i) => {
+      if (i > 0) cell.appendChild(document.createTextNode(' '));
+      cell.appendChild(this.renderValue(value, `${entry.id}-${i}`));
+    });
+  }
 
-    (window as any).__candyCopy = (id: string, btn: HTMLButtonElement) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      navigator.clipboard.writeText(el.textContent || '').then(() => {
-        const orig = btn.innerHTML;
-        btn.textContent = '✓ Copied';
-        setTimeout(() => { btn.innerHTML = orig; }, 1200);
-      });
-    };
+  private renderPart(part: MessagePart): HTMLElement {
+    const span = document.createElement('span');
+    span.textContent = part.text;
+    applySafeStyle(span, part.style);
+    return span;
+  }
 
-    (window as any).__candyCopyFull = (id: string, btn: HTMLButtonElement) => {
-      const val = this.originalValues.get(id);
-      if (!val) return;
-      navigator.clipboard.writeText(JSON.stringify(val, null, 2)).then(() => {
-        const orig = btn.innerHTML;
-        btn.textContent = '✓ Copied';
-        setTimeout(() => { btn.innerHTML = orig; }, 1200);
-      });
-    };
+  private renderValue(value: unknown, uid: string): Node {
+    if (value === null || typeof value !== 'object') {
+      return document.createTextNode(String(value));
+    }
+    if (looksLikeError(value)) return this.renderError(value, uid);
 
-    (window as any).__candyToggle = (uid: string, toggleEl: HTMLElement) => {
-      const row = toggleEl.closest('tr') as HTMLElement;
-      if (!row) return;
-      const detailId = `detail-${uid}`;
-      const existing = document.getElementById(detailId);
+    const { text } = safeStringify(value, { space: 2 });
+    const isLong = text.split('\n').length > 3;
+    if (!isLong) {
+      const pre = document.createElement('pre');
+      pre.className = 'candy-json-pre candy-json-pre--inline';
+      this.paintJson(pre, text);
+      return pre;
+    }
 
-      if (existing) {
-        existing.remove();
-        toggleEl.classList.add('collapsed');
-        const preview = row.querySelector(`[data-preview="${uid}"]`) as HTMLElement;
-        if (preview) preview.style.display = 'inline';
+    const frag = document.createDocumentFragment();
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'candy-json-toggle collapsed';
+    toggle.dataset.act = 'row-toggle';
+    toggle.dataset.uid = uid;
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', `Expand ${previewOf(value)}`);
+    toggle.textContent = '▼';
+
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'candy-json-preview';
+    preview.dataset.act = 'row-toggle';
+    preview.dataset.uid = uid;
+    preview.tabIndex = -1;
+    // Object KEYS reach the DOM here. textContent means a key named
+    // `<img src=x onerror=...>` renders as characters, not as an element.
+    preview.textContent = previewOf(value);
+
+    frag.append(toggle, preview);
+    return frag;
+  }
+
+  private renderError(err: { name: string; message: string; stack?: string[] }, uid: string): Node {
+    const frag = document.createDocumentFragment();
+    const head = document.createElement('span');
+    head.className = 'candy-err';
+    head.textContent = `${err.name}: ${err.message}`;
+    frag.appendChild(head);
+    const extras = Object.keys(err).filter((k) => !['name', 'message', 'stack'].includes(k));
+    if (err.stack?.length || extras.length) {
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'candy-json-toggle collapsed';
+      toggle.dataset.act = 'row-toggle';
+      toggle.dataset.uid = uid;
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.setAttribute('aria-label', 'Expand stack trace');
+      toggle.textContent = '▼';
+      frag.appendChild(toggle);
+    }
+    return frag;
+  }
+
+  private paintJson(host: HTMLElement, json: string): void {
+    for (const tok of tokenizeJson(json)) {
+      if (tok.type === 'plain') {
+        host.appendChild(document.createTextNode(tok.text));
       } else {
-        const html = this.jsonHtmlMap.get(uid);
-        if (!html) return;
-        const detailRow = document.createElement('tr');
-        detailRow.id = detailId;
-        detailRow.className = 'candy-detail-row';
-        detailRow.dataset.logId = row.dataset.id || '';
-        if (row.classList.contains('candy-tr--pinned')) detailRow.classList.add('candy-tr--pinned');
-        detailRow.innerHTML = `<td colspan="5" class="candy-td candy-td--detail">${html}</td>`;
-        row.after(detailRow);
-        toggleEl.classList.remove('collapsed');
-        const preview = row.querySelector(`[data-preview="${uid}"]`) as HTMLElement;
-        if (preview) preview.style.display = 'none';
+        const s = document.createElement('span');
+        s.className = `candy-json-${tok.type}`;
+        s.textContent = tok.text;
+        host.appendChild(s);
       }
-    };
-
-    (window as any).__candyPin = (logId: string) => {
-      if (this.pinnedLogIds.has(logId)) this.unpinLog(logId);
-      else this.pinLog(logId);
-    };
-
-    (window as any).__candyShowTagInput = (logId: string, btn: HTMLElement) => {
-      const existing = btn.parentElement?.querySelector('.candy-tag-input');
-      if (existing) { existing.remove(); return; }
-
-      const wrap = document.createElement('span');
-      wrap.className = 'candy-tag-input';
-      wrap.innerHTML = `<input type="text" placeholder="Tag name…" maxlength="20" />`;
-      btn.after(wrap);
-      const input = wrap.querySelector('input') as HTMLInputElement;
-      input.focus();
-
-      const commit = () => {
-        const label = input.value.trim();
-        if (!label) { wrap.remove(); return; }
-        const entry = this.logs.find((l) => l.id === logId);
-        if (entry) {
-          const tag: LogTag = { label: label.toUpperCase(), color: '#bb9af7', bg: 'rgba(187,154,247,.18)' };
-          if (!entry.tags) entry.tags = [];
-          entry.tags.push(tag);
-          const row =
-            this.pinnedBody?.querySelector(`tr[data-id="${logId}"]`) ||
-            this.tableBody?.querySelector(`tr[data-id="${logId}"]`);
-          if (row) {
-            const cell = row.querySelector('.candy-td--tags');
-            if (cell) cell.innerHTML = this.renderTags(entry.tags);
-          }
-          if (this.pinnedLogIds.has(logId)) this.savePinnedToStorage();
-        }
-        wrap.remove();
-      };
-
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') wrap.remove();
-      });
-      input.addEventListener('blur', () => setTimeout(() => { if (wrap.parentElement) wrap.remove(); }, 200));
-    };
-
-    (window as any).__candyDeleteRow = (logId: string) => {
-      this.container?.querySelectorAll(`tr[data-id="${logId}"]`).forEach((r) => r.remove());
-      this.container?.querySelectorAll(`tr.candy-detail-row[data-log-id="${logId}"]`).forEach((r) => r.remove());
-      const idx = this.logs.findIndex((l) => l.id === logId);
-      if (idx !== -1) {
-        const entry = this.logs[idx];
-        this.logs.splice(idx, 1);
-        this.logCounts.all = Math.max(0, this.logCounts.all - 1);
-        this.logCounts[entry.level] = Math.max(0, (this.logCounts[entry.level] || 0) - 1);
-        this.updateCounts();
-        this.updateEmptyState();
-      }
-      if (this.pinnedLogIds.has(logId)) {
-        this.pinnedLogIds.delete(logId);
-        this.savePinnedToStorage();
-      }
-    };
+    }
   }
 
-  /* ================================================================ */
-  /*  Header actions                                                   */
-  /* ================================================================ */
+  private renderActions(cell: HTMLElement, entry: LogEntry, pinned: boolean): void {
+    const mk = (act: string, cls: string, glyph: string, label: string, pressed?: boolean) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `candy-abtn ${cls}` + (pressed ? ' active' : '');
+      b.dataset.act = act;
+      b.dataset.id = entry.id;
+      b.setAttribute('aria-label', label);
+      b.title = label;
+      if (pressed !== undefined) b.setAttribute('aria-pressed', String(pressed));
+      const g = document.createElement('span');
+      g.textContent = glyph;
+      g.setAttribute('aria-hidden', 'true');
+      b.appendChild(g);
+      return b;
+    };
+    cell.append(
+      mk('row-copy', 'candy-abtn--copy', '📋', 'Copy log text'),
+      mk('row-pin', 'candy-abtn--pin', '📌', pinned ? 'Unpin this log' : 'Pin this log to the top', pinned),
+      mk('row-tag', 'candy-abtn--tag', '🏷️', 'Add a tag to this log'),
+      mk('row-del', 'candy-abtn--del', '🗑️', 'Delete this log'),
+    );
+    this.customActions.forEach((a, i) => {
+      const b = mk('custom', 'candy-abtn--custom', a.icon || '⚡', a.label);
+      b.dataset.index = String(i);
+      cell.appendChild(b);
+    });
+  }
+
+  /* ============================== detail rows ============================== */
+
+  private toggleDetail(id: string, btn: HTMLElement): void {
+    const uid = btn.dataset.uid || id;
+    const row = this.rows.get(id);
+    const entry = this.store.get(id);
+    if (!row || !entry) return;
+
+    const existing = this.container?.querySelector<HTMLElement>(
+      `tr.candy-detail-row[data-detail-uid="${cssEsc(uid)}"]`,
+    );
+    const toggle = row.querySelector<HTMLElement>(`.candy-json-toggle[data-uid="${cssEsc(uid)}"]`);
+    if (existing) {
+      existing.remove();
+      toggle?.classList.add('collapsed');
+      toggle?.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    const index = Number(uid.split('-').pop());
+    const value = Number.isFinite(index) ? entry.snapshot[index] : entry.snapshot[0];
+
+    const detail = document.createElement('tr');
+    detail.className = 'candy-detail-row' + (this.store.isPinned(id) ? ' candy-tr--pinned' : '');
+    detail.dataset.detailFor = id;
+    detail.dataset.detailUid = uid;
+    const cell = document.createElement('td');
+    cell.className = 'candy-td candy-td--detail';
+    cell.colSpan = this.columnCount;
+
+    if (entry.truncated) {
+      const warn = document.createElement('span');
+      warn.className = 'candy-truncated';
+      warn.textContent = '⚠ truncated for display';
+      cell.appendChild(warn);
+    }
+
+    const pre = document.createElement('pre');
+    pre.className = 'candy-json-pre';
+    const { text } = safeStringify(value, { space: 2 });
+    this.paintJson(pre, text);
+    cell.appendChild(pre);
+
+    const bar = document.createElement('div');
+    bar.className = 'candy-copy-row';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'candy-copy-btn';
+    copy.textContent = '📋 Copy JSON';
+    copy.addEventListener('click', () => this.copyText(text, copy), { signal: this.abort.signal });
+    bar.appendChild(copy);
+    cell.appendChild(bar);
+
+    detail.appendChild(cell);
+    row.after(detail);
+    toggle?.classList.remove('collapsed');
+    toggle?.setAttribute('aria-expanded', 'true');
+  }
+
+  /* ============================== tagging ============================== */
+
+  private showTagInput(id: string, btn: HTMLElement): void {
+    const host = btn.parentElement;
+    if (!host) return;
+    const open = host.querySelector('.candy-tag-input');
+    if (open) {
+      open.remove();
+      return;
+    }
+    const wrap = document.createElement('span');
+    wrap.className = 'candy-tag-input';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 24;
+    input.placeholder = 'Tag name…';
+    input.setAttribute('aria-label', 'New tag name');
+    wrap.appendChild(input);
+    btn.after(wrap);
+    input.focus();
+
+    const commit = () => {
+      const label = input.value.trim();
+      wrap.remove();
+      if (!label) return;
+      const entry = this.store.get(id);
+      if (!entry) return;
+      entry.tags = [...(entry.tags || []), { label: label.toUpperCase(), color: '#bb9af7', bg: 'rgba(187,154,247,.18)' }];
+      entry.search = `${entry.search} ${label.toLowerCase()}`;
+      this.store.touch(entry);
+      if (this.store.isPinned(id)) this.savePinnedToStorage();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') commit();
+      else if (e.key === 'Escape') wrap.remove();
+    });
+    input.addEventListener('blur', () => setTimeout(() => wrap.isConnected && wrap.remove(), 150));
+  }
+
+  /* ============================== filtering ============================== */
+
+  private matches(entry: LogEntry): boolean {
+    if (this.currentFilter !== 'all' && entry.level !== this.currentFilter) return false;
+    // Search the model, not `textContent` — the DOM does not contain the text of
+    // a collapsed object, so DOM search returned false negatives on big payloads.
+    return !this.searchTerm || entry.search.includes(this.searchTerm);
+  }
+
+  private setFilter(level: LogLevel | 'all'): void {
+    this.currentFilter = level;
+    for (const b of this.container!.querySelectorAll<HTMLElement>('.candy-fbtn')) {
+      const on = b.dataset.level === level;
+      b.classList.toggle('candy-fbtn--active', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    this.applyFilters();
+  }
+
+  private applyFilters(): void {
+    for (const entry of this.store.all()) {
+      const row = this.rows.get(entry.id);
+      if (!row) continue;
+      const hide = !this.matches(entry);
+      row.classList.toggle('candy-tr--hidden', hide);
+      const detail = this.container?.querySelector<HTMLElement>(
+        `tr.candy-detail-row[data-detail-for="${cssEsc(entry.id)}"]`,
+      );
+      detail?.classList.toggle('candy-tr--hidden', hide);
+    }
+    this.updateEmptyState();
+  }
+
+  private refreshCounts(): void {
+    const counts = this.store.counts();
+    for (const key of ['all', ...LOG_LEVELS]) {
+      const el = this.countEls.get(key);
+      if (el) el.textContent = String(counts[key as LogLevel | 'all'] ?? 0);
+    }
+    if (this.counterEl) this.counterEl.textContent = String(counts.all);
+    this.updateEmptyState();
+  }
+
+  private updateEmptyState(): void {
+    this.emptyEl?.classList.toggle('hidden', this.store.size > 0);
+  }
+
+  /* ============================== scroll ============================== */
+
+  private scrollToBottom(): void {
+    const w = this.wrapEl;
+    if (!w) return;
+    w.scrollTop = w.scrollHeight;
+    this.stickToBottom = true;
+    this.clearUnseen();
+  }
+
+  private bumpUnseen(): void {
+    this.unseen++;
+    if (this.newPillEl) {
+      this.newPillEl.textContent = `↓ ${this.unseen} new`;
+      this.newPillEl.classList.remove('candy-newpill--hidden');
+    }
+  }
+
+  private clearUnseen(): void {
+    this.unseen = 0;
+    this.newPillEl?.classList.add('candy-newpill--hidden');
+  }
+
+  /* ============================== header actions ============================== */
 
   private toggleMinimize(): void {
-    if (!this.container) return;
     this.isMinimized = !this.isMinimized;
-    this.container.classList.toggle('candy-logger--minimized', this.isMinimized);
-    const btn = this.container.querySelector('[data-action="minimize"]');
-    if (btn) btn.textContent = this.isMinimized ? '+' : '−';
+    this.container!.classList.toggle('candy-logger--minimized', this.isMinimized);
+    const btn = this.container!.querySelector<HTMLElement>('[data-act="minimize"]');
+    if (btn) {
+      const glyph = btn.firstElementChild;
+      if (glyph) glyph.textContent = this.isMinimized ? '+' : '−';
+      btn.setAttribute('aria-expanded', String(!this.isMinimized));
+      btn.setAttribute('aria-label', this.isMinimized ? 'Expand panel' : 'Minimize panel');
+    }
   }
 
-  private togglePanelPin(): void {
-    if (!this.container) return;
+  private togglePanelPin(btn: HTMLElement): void {
     this.isPanelPinned = !this.isPanelPinned;
-    this.container.classList.toggle('candy-logger--pinned', this.isPanelPinned);
-    const btn = this.container.querySelector('[data-action="pin"]') as HTMLElement;
-    if (btn) btn.classList.toggle('active', this.isPanelPinned);
+    this.container!.classList.toggle('candy-logger--pinned', this.isPanelPinned);
+    btn.classList.toggle('active', this.isPanelPinned);
+    btn.setAttribute('aria-pressed', String(this.isPanelPinned));
+  }
+
+  private setTheme(theme: 'light' | 'dark'): void {
+    this.resolvedTheme = theme;
+    const el = this.container!;
+    el.classList.toggle('candy-logger--dark', theme === 'dark');
+    el.classList.toggle('candy-logger--light', theme === 'light');
+    const btn = el.querySelector<HTMLElement>('[data-act="theme"] span');
+    if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
   }
 
   private cycleTheme(): void {
-    if (!this.container) return;
-    this.theme = this.theme === 'dark' ? 'light' : 'dark';
-    this.container.className =
-      `candy-logger candy-logger--${this.theme}` +
-      (this.isPanelPinned ? ' candy-logger--pinned' : '') +
-      (this.isMinimized ? ' candy-logger--minimized' : '');
-    const btn = this.container.querySelector('[data-action="theme"]');
-    if (btn) {
-      btn.textContent = this.theme === 'dark' ? '☀️' : '🌙';
-      btn.setAttribute('title', `Switch to ${this.theme === 'dark' ? 'light' : 'dark'} theme`);
-    }
+    this.themeSetting = this.resolvedTheme === 'dark' ? 'light' : 'dark';
+    this.setTheme(this.themeSetting);
   }
 
   private exportLogs(): void {
-    const data = this.logs.map((l) => ({
-      time: l.timestamp.toISOString(),
+    const data = this.store.all().map((l) => ({
+      time: isNaN(l.timestamp.getTime()) ? null : l.timestamp.toISOString(),
       level: l.level,
       message: l.message,
       tags: l.tags?.map((t) => t.label) || [],
-      args: l.args,
+      data: l.snapshot,
     }));
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `candy-logs-${Date.now()}.json`;
+    a.download = `candy-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  /* ================================================================ */
-  /*  Pinning                                                          */
-  /* ================================================================ */
+  private copyAll(btn: HTMLElement): void {
+    const text = this.store
+      .all()
+      .map((l) => `[${l.timestamp.toISOString()}] ${l.level.toUpperCase()} ${l.message}`)
+      .join('\n');
+    this.copyText(text, btn);
+  }
 
-  private pinLog(logId: string): void {
-    const entry = this.logs.find((l) => l.id === logId);
-    if (!entry || !this.pinnedBody || !this.tableBody) return;
-    this.pinnedLogIds.add(logId);
-
-    const row = this.tableBody.querySelector(`tr[data-id="${logId}"]`) as HTMLElement;
-    if (row) {
-      row.classList.add('candy-tr--pinned');
-      this.pinnedBody.appendChild(row);
-      this.container?.querySelectorAll(`tr.candy-detail-row[data-log-id="${logId}"]`).forEach((dr) => {
-        dr.classList.add('candy-tr--pinned');
-        row.after(dr);
-      });
-      const pinBtn = row.querySelector('.candy-abtn--pin');
-      if (pinBtn) { pinBtn.classList.add('active'); pinBtn.setAttribute('title', 'Unpin — remove from top'); }
+  private copyText(text: string, btn: HTMLElement): void {
+    const done = () => this.flash(btn, '✓');
+    try {
+      navigator.clipboard?.writeText(text).then(done, () => this.flash(btn, '✕'));
+    } catch {
+      this.flash(btn, '✕');
     }
-    this.savePinnedToStorage();
   }
 
-  private unpinLog(logId: string): void {
-    if (!this.pinnedBody || !this.tableBody) return;
-    this.pinnedLogIds.delete(logId);
-
-    const row = this.pinnedBody.querySelector(`tr[data-id="${logId}"]`) as HTMLElement;
-    if (row) {
-      row.classList.remove('candy-tr--pinned');
-      this.tableBody.appendChild(row);
-      this.container?.querySelectorAll(`tr.candy-detail-row[data-log-id="${logId}"]`).forEach((dr) => {
-        dr.classList.remove('candy-tr--pinned');
-        row.after(dr);
-      });
-      const pinBtn = row.querySelector('.candy-abtn--pin');
-      if (pinBtn) { pinBtn.classList.remove('active'); pinBtn.setAttribute('title', 'Pin — keep at top & persist on reload'); }
-    }
-    this.savePinnedToStorage();
+  private flash(btn: HTMLElement, glyph: string): void {
+    const host = btn.firstElementChild ?? btn;
+    const prev = host.textContent;
+    host.textContent = glyph;
+    setTimeout(() => {
+      if (host.isConnected) host.textContent = prev;
+    }, 900);
   }
+
+  /* ============================== pin persistence ============================== */
 
   private loadPinnedFromStorage(): void {
+    if (!this.options.persistPins) return;
+    let raw: string | null = null;
     try {
-      const raw = localStorage.getItem(PINNED_KEY);
-      if (!raw) return;
-      const entries: StoredPin[] = JSON.parse(raw);
-      for (let i = 0; i < entries.length; i++) {
-        const d = entries[i];
+      raw = localStorage.getItem(PINNED_KEY);
+    } catch {
+      return; // storage disabled (private mode, blocked cookies)
+    }
+    if (!raw) return;
+    let list: unknown;
+    try {
+      list = JSON.parse(raw);
+    } catch {
+      try {
+        localStorage.removeItem(PINNED_KEY);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (!Array.isArray(list)) return;
+    // Validate per record so one bad entry cannot abort the whole batch.
+    for (const d of list as StoredPin[]) {
+      try {
+        if (!d || !isLogLevel(d.level) || typeof d.message !== 'string') continue;
+        const ts = new Date(d.timestamp);
+        if (isNaN(ts.getTime())) continue;
         const entry: LogEntry = {
-          id: `pin${i}_${Date.now()}`,
+          id: this.store.nextId(),
           level: d.level,
           message: d.message,
-          timestamp: new Date(d.timestamp),
-          args: d.args,
-          tags: d.tags,
+          timestamp: ts,
+          args: [],
+          snapshot: [d.message],
+          tags: Array.isArray(d.tags) ? d.tags.filter((t) => t && typeof t.label === 'string') : undefined,
+          search: `${d.message} ${(d.tags || []).map((t) => t?.label ?? '').join(' ')}`.toLowerCase(),
         };
-        this.pinnedLogIds.add(entry.id);
-        this.logs.push(entry);
-        this.logCounts.all++;
-        this.logCounts[entry.level] = (this.logCounts[entry.level] || 0) + 1;
-
-        if (this.pinnedBody) {
-          const row = this.createRow(entry, true);
-          this.pinnedBody.appendChild(row);
-        }
+        this.store.adopt(entry, true);
+      } catch {
+        /* skip this record */
       }
-      this.updateCounts();
-      this.updateEmptyState();
-    } catch { /* ignore corrupt storage */ }
+    }
   }
 
   private savePinnedToStorage(): void {
+    if (!this.options.persistPins) return;
     try {
-      const pinned = this.logs.filter((l) => this.pinnedLogIds.has(l.id));
+      const pinned = this.store.pinnedEntries();
+      // Arguments are deliberately NOT persisted — logged payloads routinely hold
+      // tokens and PII, and localStorage outlives the session.
       const data: StoredPin[] = pinned.map((l) => ({
-        id: l.id,
         level: l.level,
         message: l.message,
-        timestamp: l.timestamp.toISOString(),
-        args: l.args,
+        timestamp: isNaN(l.timestamp.getTime()) ? new Date(0).toISOString() : l.timestamp.toISOString(),
         tags: l.tags,
       }));
+      while (data.length && JSON.stringify(data).length > MAX_PIN_BYTES) data.shift();
       if (data.length === 0) localStorage.removeItem(PINNED_KEY);
       else localStorage.setItem(PINNED_KEY, JSON.stringify(data));
-    } catch { /* storage unavailable */ }
-  }
-
-  /* ================================================================ */
-  /*  Filtering                                                        */
-  /* ================================================================ */
-
-  private setFilter(level: LogLevel | 'all'): void {
-    this.currentFilter = level;
-    this.applyFilters();
-  }
-
-  private applyFilters(): void {
-    const filterRows = (tbody: HTMLTableSectionElement | null) => {
-      if (!tbody) return;
-      tbody.querySelectorAll('.candy-tr').forEach((row) => {
-        const el = row as HTMLElement;
-        const lvl = el.dataset.level || '';
-        const text = el.textContent?.toLowerCase() || '';
-        const matchLevel = this.currentFilter === 'all' || lvl === this.currentFilter;
-        const matchSearch = !this.searchTerm || text.includes(this.searchTerm);
-        el.classList.toggle('candy-tr--hidden', !(matchLevel && matchSearch));
-      });
-    };
-    filterRows(this.pinnedBody);
-    filterRows(this.tableBody);
-
-    this.container?.querySelectorAll('.candy-detail-row').forEach((dr) => {
-      const logId = (dr as HTMLElement).dataset.logId;
-      if (logId) {
-        const parent =
-          this.pinnedBody?.querySelector(`tr[data-id="${logId}"]`) ||
-          this.tableBody?.querySelector(`tr[data-id="${logId}"]`);
-        (dr as HTMLElement).classList.toggle('candy-tr--hidden', !parent || parent.classList.contains('candy-tr--hidden'));
-      }
-    });
-  }
-
-  private updateCounts(): void {
-    if (!this.container) return;
-    this.container.querySelectorAll('.candy-fbtn').forEach((btn) => {
-      const lvl = (btn as HTMLElement).dataset.level || 'all';
-      const span = btn.querySelector('.candy-fcount');
-      if (span) span.textContent = String(this.logCounts[lvl] || 0);
-    });
-    const counter = this.container.querySelector('.candy-log-counter');
-    if (counter) counter.textContent = String(this.logCounts.all);
-  }
-
-  private updateEmptyState(): void {
-    if (!this.container) return;
-    const empty = this.container.querySelector('.candy-empty') as HTMLElement;
-    if (empty) empty.classList.toggle('hidden', this.logCounts.all > 0);
-  }
-
-  /* ================================================================ */
-  /*  Clear                                                            */
-  /* ================================================================ */
-
-  private clearLogs(): void {
-    if (this.tableBody) this.tableBody.innerHTML = '';
-    if (this.pinnedBody) this.pinnedBody.innerHTML = '';
-    this.container?.querySelectorAll('.candy-detail-row').forEach((r) => r.remove());
-    this.logs = [];
-    this.logCounts = { all: 0, log: 0, info: 0, warn: 0, error: 0, debug: 0, success: 0 };
-    this.originalValues.clear();
-    this.jsonHtmlMap.clear();
-    this.pinnedLogIds.clear();
-    this.savePinnedToStorage();
-    this.updateCounts();
-    this.updateEmptyState();
-  }
-
-  /* ================================================================ */
-  /*  Row creation                                                     */
-  /* ================================================================ */
-
-  private createRow(entry: LogEntry, isPinned: boolean): HTMLTableRowElement {
-    const row = document.createElement('tr');
-    row.className = 'candy-tr' + (isPinned ? ' candy-tr--pinned' : '');
-    row.dataset.level = entry.level;
-    row.dataset.id = entry.id;
-
-    const time = entry.timestamp.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    row.innerHTML = `
-      <td class="candy-td candy-td--time">${time}</td>
-      <td class="candy-td candy-td--level"><span class="candy-level candy-level--${entry.level}">${entry.level.toUpperCase()}</span></td>
-      <td class="candy-td candy-td--tags">${this.renderTags(entry.tags)}</td>
-      <td class="candy-td candy-td--message">${this.formatMessage(entry.args)}</td>
-      <td class="candy-td candy-td--actions">${this.renderActions(entry, isPinned)}</td>
-    `;
-
-    if (this.currentFilter !== 'all' && entry.level !== this.currentFilter) row.classList.add('candy-tr--hidden');
-    if (this.searchTerm && !(row.textContent?.toLowerCase() || '').includes(this.searchTerm)) row.classList.add('candy-tr--hidden');
-
-    return row;
-  }
-
-  /* ================================================================ */
-  /*  Public: add a log                                                */
-  /* ================================================================ */
-
-  public addLog(entry: LogEntry): void {
-    if (!this.tableBody) return;
-
-    this.logs.push(entry);
-    if (this.options.maxLogs && this.logs.length > this.options.maxLogs) {
-      const removed = this.logs.shift();
-      if (removed && !this.pinnedLogIds.has(removed.id) && this.tableBody.firstChild) {
-        this.tableBody.removeChild(this.tableBody.firstChild);
-      }
+    } catch {
+      /* quota exceeded or storage disabled — pins stay in memory */
     }
-
-    this.logCounts.all++;
-    this.logCounts[entry.level] = (this.logCounts[entry.level] || 0) + 1;
-    this.updateCounts();
-    this.updateEmptyState();
-
-    const row = this.createRow(entry, false);
-    this.tableBody.appendChild(row);
-    const wrap = this.container!.querySelector('.candy-table-wrap');
-    if (wrap) wrap.scrollTop = wrap.scrollHeight;
   }
 
-  /* ================================================================ */
-  /*  Render helpers                                                   */
-  /* ================================================================ */
+  /* ============================== public ============================== */
 
-  private renderTags(tags?: LogTag[]): string {
-    if (!tags || tags.length === 0) return '<span style="opacity:.3">—</span>';
-    return tags
-      .map((t) => {
-        const bg = t.bg || 'rgba(122,162,247,.15)';
-        const color = t.color || '#7aa2f7';
-        return `<span class="candy-tag" style="background:${bg};color:${color}">${this.escapeHtml(t.label)}</span>`;
-      })
-      .join('');
+  show(): void {
+    if (this.isMinimized) this.toggleMinimize();
   }
-
-  private renderActions(entry: LogEntry, isPinned: boolean): string {
-    const id = entry.id;
-    const safeMsg = this.escapeHtml(JSON.stringify(JSON.stringify(entry.message)));
-    let h = '';
-    h += `<button class="candy-abtn candy-abtn--copy" title="Copy log text to clipboard" onclick="navigator.clipboard.writeText(${safeMsg});let o=this.innerHTML;this.textContent='✓';setTimeout(()=>this.innerHTML=o,900)">📋</button>`;
-    h += `<button class="candy-abtn candy-abtn--pin${isPinned ? ' active' : ''}" title="${isPinned ? 'Unpin — remove from top' : 'Pin — keep at top & persist on reload'}" onclick="__candyPin('${id}')">📌</button>`;
-    h += `<button class="candy-abtn candy-abtn--tag" title="Add a custom tag to this log" onclick="__candyShowTagInput('${id}',this)">🏷️</button>`;
-    h += `<button class="candy-abtn candy-abtn--del" title="Delete this log entry" onclick="__candyDeleteRow('${id}')">🗑️</button>`;
-    for (const a of this.customActions) {
-      h += `<button class="candy-abtn" title="${this.escapeHtml(a.label)}" onclick="__candyUI.runAction('${this.escapeHtml(a.label)}','${id}')">${a.icon || '⚡'}</button>`;
-    }
-    return h;
+  hide(): void {
+    if (!this.isMinimized) this.toggleMinimize();
   }
-
-  public runAction(label: string, logId: string): void {
-    const action = this.customActions.find((a) => a.label === label);
-    const log = this.logs.find((l) => l.id === logId);
-    if (action && log) action.onClick(log);
+  get element(): HTMLElement | null {
+    return this.container;
   }
-
-  /* ================================================================ */
-  /*  Message formatting                                               */
-  /* ================================================================ */
-
-  private formatMessage(args: any[]): string {
-    return args
-      .map((arg) => {
-        if (typeof arg === 'object' && arg !== null) {
-          try {
-            const uid = `j${++_idCounter}`;
-            const { result: truncated, hasTruncated } = this.truncateStrings(arg, 1000, uid);
-            const json = JSON.stringify(truncated, null, 2);
-            const lines = json.split('\n').length;
-            const isLong = lines > 3;
-            const preview = this.jsonPreview(arg);
-
-            const fullBtn = hasTruncated
-              ? `<button class="candy-copy-btn" onclick="__candyCopyFull('${uid}',this)">📋 Full</button>`
-              : '';
-            const detailHtml = `
-              ${hasTruncated ? '<span class="candy-truncated">⚠ truncated</span>' : ''}
-              <pre class="candy-json-pre" id="${uid}">${this.highlightJson(json)}</pre>
-              <div class="candy-copy-row">
-                <button class="candy-copy-btn" onclick="__candyCopy('${uid}',this)">📋 Copy</button>
-                ${fullBtn}
-              </div>`;
-            this.jsonHtmlMap.set(uid, detailHtml);
-
-            if (isLong) {
-              return `<span class="candy-json-toggle collapsed" onclick="__candyToggle('${uid}',this)">▼</span><span class="candy-json-preview" data-preview="${uid}" onclick="__candyToggle('${uid}',this.previousElementSibling)">${preview}</span>`;
-            }
-            return `<pre class="candy-json-pre candy-json-pre--inline" id="${uid}">${this.highlightJson(json)}</pre>`;
-          } catch {
-            return this.escapeHtml(String(arg));
-          }
-        }
-        return this.escapeHtml(String(arg));
-      })
-      .join(' ');
-  }
-
-  private jsonPreview(obj: any): string {
-    if (Array.isArray(obj)) return `Array(${obj.length})`;
-    const keys = Object.keys(obj);
-    if (keys.length === 0) return '{}';
-    return keys.length <= 3 ? `{ ${keys.join(', ')} }` : `{ ${keys.slice(0, 3).join(', ')}, +${keys.length - 3} }`;
-  }
-
-  private truncateStrings(obj: any, max: number, uid: string): { result: any; hasTruncated: boolean } {
-    let hasTruncated = false;
-    const walk = (v: any): any => {
-      if (typeof v === 'string' && v.length > max) { hasTruncated = true; return v.slice(0, max) + `...[+${v.length - max}]`; }
-      if (Array.isArray(v)) return v.map(walk);
-      if (typeof v === 'object' && v !== null) { const o: any = {}; for (const k in v) o[k] = walk(v[k]); return o; }
-      return v;
-    };
-    const result = walk(obj);
-    if (hasTruncated) this.originalValues.set(uid, obj);
-    return { result, hasTruncated };
-  }
-
-  private highlightJson(json: string): string {
-    return this.escapeHtml(json).replace(
-      /("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-      (m) => {
-        let cls = 'candy-json-number';
-        if (/^"/.test(m)) cls = /:$/.test(m) ? 'candy-json-key' : 'candy-json-string';
-        else if (/true|false/.test(m)) cls = 'candy-json-boolean';
-        else if (/null/.test(m)) cls = 'candy-json-null';
-        return `<span class="${cls}">${m}</span>`;
-      },
-    );
-  }
-
-  private escapeHtml(text: string): string {
-    const m: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return text.replace(/[&<>"']/g, (c) => m[c]);
-  }
-
-  /* ================================================================ */
-  /*  Public getters                                                   */
-  /* ================================================================ */
-
-  public getOriginalValue(uid: string): any { return this.originalValues.get(uid); }
-  public getLogs(): LogEntry[] { return [...this.logs]; }
-  public getLogCounts(): Record<string, number> { return { ...this.logCounts }; }
 }
+
+export { UI_STATE_KEY };

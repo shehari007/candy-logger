@@ -1,17 +1,23 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "declaration": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node"
+    "noEmit": true
   },
-  "include": ["src/index.ts", "src/types.ts", "src/ui.ts"],
-  "exclude": ["node_modules", "dist", "examples", "src/terminal-ui.ts"]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist", "test"]
 }

@@ -1,276 +1,343 @@
-# 🍬 Candy Logger v2
+# 🍬 Candy Logger
 
-A professional, zero-dependency browser logger with a **table-view UI**, tags, color-coded levels, action buttons, dark/light themes, and JSON export — all in one floating panel.
+A browser console panel that **can't crash your app** — safe serialization, real stack traces, CSP-friendly, zero dependencies.
+
+**~6 kB gzipped core.** The panel is a lazy chunk, so builds that never enable it ship almost nothing.
 
 ## 🚀 [Live Demo](https://candy-logger.msyb.dev)
 
-> **v2 Breaking Change** — Node.js / terminal support has been removed. Candy Logger is now **browser-only**. If you need the legacy terminal output, stay on `v1.x`.
-
 ---
 
-## ✨ Features
+## ✨ Why
+
+Most in-page loggers serialize your arguments with `JSON.stringify`. That throws on circular
+objects, renders every `Error` as `{}`, and drops `Map`, `Set`, `BigInt` and `Date` on the floor.
+Candy Logger uses a serializer that is **total** — it cannot throw, for any input.
+
+```js
+const a = {}; a.self = a;
+console.log(a);                         // → { "self": "[Circular]" }
+console.error(new Error('boom'));       // → Error: boom, with the full stack
+console.log(new Map([['k', 'v']]), 1n); // → Map(1) contents, and 1n
+```
 
 | Feature | Description |
-|---------|-------------|
-| 📊 **Table View** | Logs displayed in a structured table (Time, Level, Tags, Message, Actions) |
-| 🏷️ **Tags** | Attach custom colored tags (e.g. `AUTH`, `API`, `DB`, `PERF`) to any log |
-| 🎨 **6 Log Levels** | `log` · `info` · `debug` · `success` · `warn` · `error` — each color-coded |
-| ⚡ **Action Buttons** | Copy, bookmark, delete per row — plus custom actions via config |
-| 🌗 **Dark / Light** | Toggle themes on the fly with one-click switch |
-| 🔍 **Search & Filter** | Real-time search + filter by level with live counts |
-| 💾 **Export** | Download all logs as a `.json` file |
-| 📌 **Pin, Drag, Resize** | Pin to stay visible, drag anywhere, resize from corner |
-| 📦 **Collapsible JSON** | Large objects auto-collapse with preview; syntax-highlighted |
-| 🚀 **Zero Config** | One line to start; just set `forceUI: true` |
-| 🪶 **Zero Dependencies** | No runtime deps — just your browser |
+| --- | --- |
+| 🛡️ **Safe serialization** | Circular refs, `Error` + stack + `cause`, `Map`/`Set`/`Date`/`RegExp`/`BigInt`, DOM nodes, throwing getters, depth + size caps |
+| 🔒 **Injection-safe** | Every cell is built with `textContent`. Object keys, tag labels and action labels from untrusted data render as text |
+| 🚫 **No inline handlers** | One delegated listener and zero `window.__*` globals, so the panel works under `script-src 'self'` |
+| 📊 **Table view** | Time · Level · Tags · Message · Actions, with per-level filters and live counts |
+| 🔍 **Real search** | Debounced search over the log *data*, so text inside collapsed objects still matches |
+| 📌 **Pins** | Pinned rows stay on top, survive `clear()`, are exempt from `maxLogs`, and persist across reloads |
+| 💅 **Format specifiers** | `%s %d %i %f %o %O %j %c %%` applied the way browsers do |
+| 🌗 **Real themes** | Dark, light, or `auto` following `prefers-color-scheme` and updating live |
+| ♿ **Accessible** | Named buttons, `aria-pressed` toggles, a polite live region, focus rings, reduced-motion support |
+| 📱 **Mobile-ready** | Full-screen sheet under 640px; pointer-event dragging that works on touch |
+| 🔌 **Sinks** | Pipe entries to a server, Sentry, or a test spy. The panel is just one consumer |
+| 🪶 **Zero deps** | No runtime dependencies. Tree-shakeable, ESM + CJS + IIFE |
 
 ---
 
-## 📦 Installation
+## 📦 Install
 
 ```bash
 npm install candy-logger
 ```
 
-Or via CDN:
+Or a single self-contained file, no build step:
 
 ```html
-<script type="module">
-  import { overrideConsole } from 'https://unpkg.com/candy-logger@latest/dist/index.js';
-  overrideConsole({ forceUI: true });
+<script src="https://unpkg.com/candy-logger@2"></script>
+<script>
+  overrideConsole({ enabled: true });
 </script>
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick start
 
-### Option 1 — Override Console (Recommended)
-
-Call once in your entry file. Every `console.log/info/warn/error/debug` is automatically captured.
+### Capture `console.*`
 
 ```js
 import { overrideConsole } from 'candy-logger';
 
-overrideConsole({ forceUI: true });
+// Idempotent — safe under React StrictMode and HMR.
+const logger = overrideConsole({
+  enabled: import.meta.env.DEV,   // or process.env.NODE_ENV !== 'production'
+});
 
-// That's it — use console as usual
 console.log('Hello World!');
 console.info('User signed in', { userId: 123 });
-console.warn('Disk usage > 90%');
-console.error('Payment failed', { code: 'CARD_DECLINED' });
-console.debug('Render took 12ms');
+console.error('Payment failed', new Error('CARD_DECLINED'));
 ```
 
-### Option 2 — Direct API
+### Or use the logger directly
+
+```js
+import { createLogger } from 'candy-logger';
+
+const log = createLogger({ enabled: true });
+
+log.log('App started');
+log.info('Config loaded', config);
+log.debug('Cache hit', { key });
+log.success('Build passed!');
+log.warn('Rate limit close');
+log.error('Uncaught', err);
+```
+
+### Shared instance
+
+`candy` is always a real logger — never `null` — so importing it under SSR is safe.
+It captures logs immediately; call `attachUI()` when you want to see them.
 
 ```js
 import candy from 'candy-logger';
 
-candy.log('App started');
-candy.info('Config loaded', config);
-candy.debug('Cache hit', { key });
-candy.success('Build passed!');
-candy.warn('Rate limit close');
-candy.error('Uncaught', err);
+candy.log('captured even with no panel');
+candy.getLogs();          // → [LogEntry, …]
+
+await candy.attachUI();   // panel appears, backfilled with everything above
 ```
 
 ---
 
-## 🏷️ Tagged Logging
-
-Attach one or more tags to any log for easy categorization and filtering.
+## 🏷️ Tagged logging
 
 ```js
-import { overrideConsole } from 'candy-logger';
-const candy = overrideConsole({ forceUI: true });
+log.tagged({ label: 'AUTH', bg: 'rgba(139,92,246,.2)', color: '#a78bfa' },
+  'info', 'Token refreshed', { expiresIn: '1h' });
 
-// Single tag
-candy.tagged(
-  { label: 'AUTH', bg: 'rgba(139,92,246,.2)', color: '#a78bfa' },
-  'info',
-  'Token refreshed',
-  { expiresIn: '1h' }
-);
-
-// Multiple tags
-candy.tagged(
-  [
-    { label: 'DB', bg: 'rgba(234,179,8,.18)', color: '#eab308' },
-    { label: 'SLOW', bg: 'rgba(239,68,68,.18)', color: '#f87171' }
-  ],
-  'warn',
-  'Query took 3.1s',
-  { query: 'SELECT * FROM orders' }
-);
+log.tagged([
+  { label: 'DB',   bg: 'rgba(234,179,8,.18)',  color: '#eab308' },
+  { label: 'SLOW', bg: 'rgba(239,68,68,.18)',  color: '#f87171' }
+], 'warn', 'Query took 3.1s', { query: 'SELECT * FROM orders' });
 ```
+
+Tag colors are validated against a CSS property allowlist, so a color from an API
+response can never break out into markup.
 
 ---
 
 ## ⚙️ Configuration
 
 ```js
-overrideConsole({
-  forceUI: true,               // Show UI even in production
-  theme: 'dark',               // 'dark' | 'light' | 'auto'
+createLogger({
+  enabled: true,               // create the panel (alias: forceUI)
+  theme: 'auto',               // 'dark' | 'light' | 'auto'
   position: 'bottom-right',    // 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'full-bottom'
-  maxLogs: 500,                // Max logs in memory (oldest removed first)
-  collapsed: false,            // Start minimized
-  defaultTags: [               // Tags applied to every log
-    { label: 'v2.0', color: '#7aa2f7' }
-  ],
-  badgeText: 'DEV',            // Optional badge next to title
+  maxLogs: 500,                // ring buffer for UNPINNED rows
+  showTimestamp: true,         // show the Time column
+  tags: true,                  // show the Tags column
+  collapsed: false,            // start minimized
+  dimWhenIdle: false,          // fade to 12% until hovered
+  persistPins: true,           // save pinned rows to localStorage
+  retainArgs: false,           // keep references to logged objects (prevents GC)
+  maxDepth: 8,                 // object depth captured
+  maxString: 1000,             // chars kept per string
+  defaultTags: [{ label: 'v2.1', color: '#7aa2f7' }],
+  badgeText: 'DEV',
+  actions: [{ label: 'Copy id', icon: '🔗', onClick: (entry) => {} }],
 });
 ```
 
----
-
-## 🖼️ Framework Examples
-
-### React
-
-```jsx
-// src/main.jsx
-import { overrideConsole } from 'candy-logger';
-overrideConsole({ forceUI: true });
-
-// Now use console.log anywhere — it's enhanced!
-function App() {
-  return <button onClick={() => console.log('Clicked!')}>Click</button>;
-}
-```
-
-### Vue
-
-```js
-// main.js
-import { createApp } from 'vue';
-import { overrideConsole } from 'candy-logger';
-import App from './App.vue';
-
-overrideConsole({ forceUI: true });
-createApp(App).mount('#app');
-```
-
-### Angular
-
-```ts
-// main.ts
-import { overrideConsole } from 'candy-logger';
-overrideConsole({ forceUI: true });
-platformBrowserDynamic().bootstrapModule(AppModule);
-```
-
-### Svelte
-
-```svelte
-<script>
-  import { onMount } from 'svelte';
-  import { overrideConsole } from 'candy-logger';
-  const candy = overrideConsole({ forceUI: true });
-
-  onMount(() => candy.success('Ready!'));
-</script>
-```
-
-### Next.js (client only)
-
-```tsx
-'use client';
-import { useEffect } from 'react';
-import { overrideConsole } from 'candy-logger';
-
-export default function Providers({ children }) {
-  useEffect(() => { overrideConsole({ forceUI: true }); }, []);
-  return <>{children}</>;
-}
-```
+Every option above does something. v2.0 accepted four (`tableView`, `showTimestamp`,
+`tags`, `theme: 'auto'`) that were silently ignored.
 
 ---
 
 ## 🎯 API
 
-### Log Methods
+```ts
+// Levels
+log.log(...args)  log.info(...args)  log.debug(...args)
+log.success(...args)  log.warn(...args)  log.error(...args)
+log.tagged(tag | tag[], level, ...args)
 
-```js
-candy.log(...args)      // 📝 General log (blue)
-candy.info(...args)     // ℹ️  Informational (cyan)
-candy.debug(...args)    // 🐛 Debug (purple)
-candy.success(...args)  // ✅ Success (green)
-candy.warn(...args)     // ⚠️  Warning (amber)
-candy.error(...args)    // ❌ Error (red)
+// Data — works with or without a panel
+log.getLogs(): LogEntry[]
+log.getStats(): Record<LogLevel | 'all', number>
+log.clear(options?: { includePinned?: boolean })
+
+// Panel
+await log.attachUI(options?)
+log.detachUI()
+log.showPanel() / log.hidePanel()
+
+// Console capture
+log.captureConsole(): () => void      // returns a disposer
+overrideConsole(options?): CandyLogger
+restoreConsole()
+isConsoleOverridden(): boolean
+
+// Extensibility
+log.addSink(sink: Sink): () => void
+log.destroy()                          // removes panel, listeners, sinks; restores console
 ```
 
-### Tagged Logging
+### Sinks
+
+The panel is one consumer of the store. Add your own:
 
 ```js
-candy.tagged(tag | tag[], level, ...args)
+const off = log.addSink({
+  write(entry) {
+    if (entry.level === 'error') {
+      navigator.sendBeacon('/api/logs', JSON.stringify(entry));
+    }
+  },
+});
 ```
 
-### Console Override
+A sink that throws can never break the `console.log` call that triggered it.
 
-```js
-import { overrideConsole, restoreConsole } from 'candy-logger';
+### Serializer
 
-const logger = overrideConsole(options);
+The serialization primitives are exported, in case you want them on their own:
 
-// ... your code ...
+```ts
+import { safeStringify, normalize, serializeError, formatArgs } from 'candy-logger';
 
-restoreConsole(logger); // Restore original console
-```
-
-### Utilities
-
-```js
-candy.getStats()   // { all: 10, log: 3, info: 2, ... }
-candy.getLogs()    // LogEntry[]
+safeStringify(anythingAtAll);   // { text, truncated } — never throws
+serializeError(err);            // { name, message, stack[], cause?, ...ownProps }
+formatArgs(['%s: %d', 'hits', 42]);
 ```
 
 ---
 
-## 🔧 Showing the UI
+## 🖼️ Framework examples
 
-The UI is **opt-in** — set `forceUI: true` to display it:
-
-```js
-overrideConsole({ forceUI: true });
+```jsx
+// React / Next.js — src/main.jsx or a client component
+import { overrideConsole } from 'candy-logger';
+overrideConsole({ enabled: import.meta.env.DEV });
 ```
 
-- When `forceUI` is omitted or `false`, logs pass through to the native console with zero overhead
-- Works on any domain — localhost, staging, production
+```js
+// Vue — main.js
+import { createApp } from 'vue';
+import { overrideConsole } from 'candy-logger';
+overrideConsole({ enabled: import.meta.env.DEV });
+createApp(App).mount('#app');
+```
+
+```ts
+// Angular — main.ts
+import { overrideConsole } from 'candy-logger';
+overrideConsole({ enabled: !environment.production });
+```
+
+```svelte
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import { createLogger } from 'candy-logger';
+  const log = createLogger({ enabled: true });
+  onMount(() => log.success('Ready!'));
+  onDestroy(() => log.destroy());
+</script>
+```
+
+`overrideConsole()` is idempotent, so StrictMode's double-invoke and Fast Refresh
+re-runs reuse the same logger instead of stacking panels.
+
+---
+
+## 🔒 Security notes
+
+- **Don't ship the panel to end users.** Gate `enabled` on your dev flag. The logger keeps
+  a buffer in memory; anything you log is readable by any script that can reach the instance.
+- **Pinned rows are written to `localStorage`** as rendered text so they survive a reload.
+  Don't pin rows containing tokens or PII, or set `persistPins: false`. Raw arguments are
+  never persisted, and the store is capped at 64 kB.
+- **`retainArgs` is off by default.** Arguments are serialized once and then released, so the
+  logger doesn't hold your objects (and their DOM subtrees) alive. Turn it on only if a custom
+  action needs the live value.
+- **Tag colors and `%c` styles** are filtered through a CSS property allowlist.
 
 ---
 
 ## 📝 TypeScript
 
-Fully typed. All interfaces are exported:
-
 ```ts
-import type { LogLevel, LogEntry, LogTag, LogAction, CandyLoggerOptions } from 'candy-logger';
+import type {
+  LogLevel, LogEntry, LogTag, LogAction,
+  CandyLoggerOptions, PanelPosition, PanelTheme, Sink,
+} from 'candy-logger';
+```
+
+---
+
+## 🛠️ Development
+
+```bash
+npm install
+npm run build      # tsup → ESM + CJS + IIFE, with .d.ts and sourcemaps
+npm test           # vitest (118 tests)
+npm run typecheck
+npm run demo       # build, then serve demo-ui.html at :4321
 ```
 
 ---
 
 ## 📋 Changelog
 
+### v2.1.0 — correctness release
+
+**Fixed**
+
+- `console.log(circularObject)` no longer throws a `TypeError` into the calling code
+- `Error` objects render with message, stack, `cause` and custom fields instead of `{}`
+- `Map`, `Set`, `Date`, `RegExp`, `BigInt`, `Symbol`, functions and DOM nodes all serialize
+- **XSS** via object keys, tag labels/colors, log levels and custom action labels
+- Panel is fully functional under a strict CSP — no inline `onclick`, no `window.__candy*` globals
+- `overrideConsole()` is idempotent — StrictMode and HMR no longer stack panels or double logs
+- `restoreConsole()` can no longer leave `console` permanently hijacked
+- Level counters stay accurate past `maxLogs` (previously drifted upward forever)
+- Pinned rows are exempt from eviction and no longer silently disappear
+- `clear()` keeps pinned rows instead of wiping them from `localStorage`
+- Search matches text inside collapsed objects (it searched the DOM before)
+- JSON keys and strings are actually highlighted; apostrophes no longer show as `&#039;`
+- Light theme defines its own level badge colors (contrast was ~1.6:1)
+- Drag works on touch via pointer events, with on-screen clamping
+- Corrupt `localStorage` records are skipped individually instead of aborting the batch
+- `showTimestamp`, `tags` and `theme: 'auto'` now work (they were accepted and ignored)
+
+**Added**
+
+- `destroy()` on the logger and the panel — removes DOM, listeners and stylesheet
+- `captureConsole()` — route `console.*` into an existing logger, returns a disposer
+- `addSink()` — pipe entries to a server, Sentry, or a test spy
+- `createLogger()`, `attachUI()`, `detachUI()`, `showPanel()`, `hidePanel()`, `isConsoleOverridden()`
+- Console format specifiers: `%s %d %i %f %o %O %j %c %%`
+- Sticky-bottom scrolling with a “N new” pill instead of yanking you to the bottom
+- Exported serializer primitives: `safeStringify`, `normalize`, `serializeError`, `formatArgs`
+- Accessibility pass: accessible names, `aria-pressed`, live region, focus rings, reduced motion
+- Mobile: full-screen sheet under 640px
+- `retainArgs`, `persistPins`, `dimWhenIdle`, `maxDepth`, `maxString` options
+- CJS and IIFE builds; `unpkg`/`jsdelivr` now serve a working `<script src>` bundle
+- 118 tests
+
+**Changed**
+
+- `getLogs()` / `getStats()` read from the core store, so they work with **no panel**
+- The panel is a dynamic import, so bundlers drop it from builds that never enable it
+- The panel is **opaque by default**; the old 12%-until-hover behaviour is `dimWhenIdle: true`
+- `maxLogs` now bounds *unpinned* rows only
+- `window.*` globals moved to the CDN build only; the npm entry is `sideEffects: false`
+- Removed `tableView` (there was no alternative view) and the dead v1 `terminal-ui.ts`
+
+**Compatible** — `overrideConsole()`, `restoreConsole()`, `candy`, `CandyLogger`, `tagged()`,
+`getLogs()`, `getStats()` and every v2.0 option except `tableView` keep working. `forceUI` is
+still accepted as an alias for `enabled`.
+
 ### v2.0.0
 
-**🔥 Complete Rewrite — Browser Only**
+Browser-only rewrite: table view UI, 6 levels, tags, action buttons, themes, JSON export.
 
-- Removed all Node.js / terminal support (blessed dependency dropped)
-- New **table-view UI** replacing the old list view
-- **6 log levels**: added `debug` and `success`
-- **Tagged logging** with custom colors
-- **Action buttons** per row: copy, bookmark, delete
-- **Dark / Light** themes with one-click toggle
-- **Export logs** as JSON
-- **Configurable position**, max logs, default tags, badge text
-- Zero runtime dependencies
-- Full TypeScript rewrite with exported types
+### v1.x (deprecated)
 
-### v1.x (Deprecated)
-
-Legacy version with Node.js terminal support and list-based browser UI. Install `candy-logger@1` if you need it.
+Node.js terminal support. Install `candy-logger@1` if you need it.
 
 ---
 
@@ -280,7 +347,7 @@ MIT
 
 ## 🤝 Contributing
 
-Contributions are welcome! Open an issue or submit a PR.
+Contributions welcome. `npm test` must pass; new behaviour needs a test.
 
 ---
 

@@ -1,8 +1,5 @@
 {
-  "builds": [
-    { "src": "demo-ui.html", "use": "@vercel/static" }
-  ],
-  "routes": [
-    { "src": "/", "dest": "demo-ui.html" }
-  ]
+  "buildCommand": "npm run build",
+  "outputDirectory": ".",
+  "rewrites": [{ "source": "/", "destination": "/demo-ui.html" }]
 }
