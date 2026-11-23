@@ -3,390 +3,734 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>🍬 Candy Logger — a browser console panel in ~6 kB</title>
-<meta name="description" content="Zero-dependency browser log panel with safe serialization, table view, tags, pins and search. Try every feature live." />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍬</text></svg>" />
+<title>Candy Logger: a browser console panel that can't crash your app</title>
+<meta name="description" content="Zero-dependency in-page log panel for browser apps. Safe serialization, table view, tags, pins, search and themes. About 5 kB gzipped core." />
+<meta name="color-scheme" content="light dark" />
+<meta property="og:title" content="Candy Logger" />
+<meta property="og:description" content="A browser console panel that can't crash your app. Zero dependencies, about 5 kB gzipped core." />
+<meta property="og:url" content="https://candy-logger.msyb.dev" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23d6336c'/%3E%3Crect x='5' y='7' width='14' height='2' rx='1' fill='%23fff'/%3E%3Crect x='5' y='11' width='10' height='2' rx='1' fill='%23fff'/%3E%3Crect x='5' y='15' width='12' height='2' rx='1' fill='%23fff'/%3E%3C/svg%3E" />
 <style>
-  *,*::before,*::after{box-sizing:border-box}
-  :root{
-    --bg:#0b0d17; --bg2:#11142230; --card:#141828; --card2:#1a1f33;
-    --fg:#e6ebff; --muted:#98a2c8; --border:#242a44;
-    --pink:#ff6ba8; --purple:#a78bfa; --blue:#60a5fa; --green:#4ade80; --amber:#fbbf24; --red:#fb7185;
-    --radius:14px;
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    --bg: #ffffff;
+    --bg-subtle: #f6f6f7;
+    --bg-hover: #efeff1;
+    --fg: #121214;
+    --fg-muted: #5c5d66;
+    --fg-subtle: #85868f;
+    --border: #e5e5e8;
+    --border-strong: #d2d2d7;
+    --accent: #d6336c;
+    --invert-bg: #121214;
+    --invert-fg: #ffffff;
+    --nav-bg: rgba(255, 255, 255, .85);
+
+    --lv-log: #2563eb; --lv-info: #0284c7; --lv-debug: #7c3aed;
+    --lv-success: #16a34a; --lv-warn: #d97706; --lv-error: #dc2626;
+
+    --syn-comment: #6e7781; --syn-keyword: #cf222e; --syn-string: #0a3069;
+    --syn-fn: #8250df; --syn-prop: #0550ae;
+
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --radius: 8px;
   }
-  html{scroll-behavior:smooth}
-  body{
-    margin:0;background:
-      radial-gradient(1100px 620px at 12% -8%, #2a1b3d 0%, transparent 60%),
-      radial-gradient(900px 520px at 88% 0%, #10283f 0%, transparent 55%),
-      var(--bg);
-    color:var(--fg);font:15px/1.65 'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
-    -webkit-font-smoothing:antialiased;min-height:100vh;
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0c0e;
+      --bg-subtle: #141417;
+      --bg-hover: #1c1c20;
+      --fg: #ececef;
+      --fg-muted: #a1a1aa;
+      --fg-subtle: #75757e;
+      --border: #232328;
+      --border-strong: #303037;
+      --accent: #f06595;
+      --invert-bg: #ececef;
+      --invert-fg: #0c0c0e;
+      --nav-bg: rgba(12, 12, 14, .8);
+
+      --lv-log: #60a5fa; --lv-info: #38bdf8; --lv-debug: #a78bfa;
+      --lv-success: #4ade80; --lv-warn: #fbbf24; --lv-error: #f87171;
+
+      --syn-comment: #8b949e; --syn-keyword: #ff7b72; --syn-string: #a5d6ff;
+      --syn-fn: #d2a8ff; --syn-prop: #79c0ff;
+    }
   }
-  .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
-  a{color:var(--blue)}
 
-  /* hero */
-  header{padding:76px 0 40px;text-align:center}
-  .logo{font-size:64px;line-height:1;filter:drop-shadow(0 6px 22px rgba(255,107,168,.45));animation:float 4s ease-in-out infinite}
-  @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
-  h1{font-size:clamp(34px,6vw,58px);margin:16px 0 6px;letter-spacing:-1.6px;font-weight:800;
-     background:linear-gradient(100deg,var(--pink),var(--purple) 45%,var(--blue));
-     -webkit-background-clip:text;background-clip:text;color:transparent}
-  .tag{font-size:clamp(16px,2.4vw,19px);color:var(--muted);max-width:660px;margin:0 auto 22px}
-  .tag b{color:var(--fg);font-weight:600}
-  .pills{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:26px}
-  .pill{font-size:12.5px;padding:5px 13px;border-radius:999px;border:1px solid var(--border);
-        background:var(--bg2);color:var(--muted);font-weight:600}
-  .pill b{color:var(--fg)}
-  .pill--good{border-color:#2d5a3d;color:var(--green)}
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  code, pre, kbd { font-family: var(--mono); }
+  :not(pre) > code {
+    font-size: .88em;
+    padding: .1em .35em;
+    border-radius: 4px;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  section[id] { scroll-margin-top: 72px; }
 
-  .cta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:14px}
-  .btn{border:1px solid var(--border);background:var(--card);color:var(--fg);padding:11px 20px;
-       border-radius:10px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;transition:.16s;display:inline-flex;
-       align-items:center;gap:8px;text-decoration:none}
-  .btn:hover{background:var(--card2);transform:translateY(-1px);border-color:#38406a}
-  .btn:focus-visible{outline:2px solid var(--purple);outline-offset:2px}
-  .btn--primary{background:linear-gradient(100deg,var(--pink),var(--purple));border:none;color:#fff;
-       box-shadow:0 8px 24px rgba(167,139,250,.32)}
-  .btn--primary:hover{filter:brightness(1.08)}
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
 
-  code,kbd{font-family:ui-monospace,'SF Mono','Cascadia Code',monospace}
-  .install{display:inline-flex;align-items:center;gap:12px;background:#0d1020;border:1px solid var(--border);
-    border-radius:10px;padding:9px 9px 9px 16px;font-size:13.5px;margin-top:6px}
-  .install code{color:var(--green)}
-  .copy{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:7px;
-    padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
-  .copy:hover{color:var(--fg)}
+  /* ---------- nav ---------- */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    background: var(--nav-bg);
+    -webkit-backdrop-filter: saturate(180%) blur(10px);
+    backdrop-filter: saturate(180%) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav .container { height: 56px; display: flex; align-items: center; gap: 28px; }
+  .brand { display: flex; align-items: center; gap: 9px; text-decoration: none; font-weight: 600; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; }
+  .brand svg { flex: none; }
+  .version {
+    font: 500 11.5px/1 var(--mono); color: var(--fg-muted);
+    padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px;
+  }
+  .nav-links { display: flex; gap: 22px; margin-right: auto; }
+  .nav-links a { text-decoration: none; color: var(--fg-muted); font-size: 14px; }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-ext { display: flex; gap: 4px; }
+  .icon-link {
+    display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px;
+    border-radius: 6px; text-decoration: none; color: var(--fg-muted); font-size: 13.5px;
+  }
+  .icon-link:hover { color: var(--fg); background: var(--bg-hover); }
 
-  /* sections */
-  section{padding:34px 0}
-  h2{font-size:24px;margin:0 0 6px;letter-spacing:-.5px;display:flex;align-items:center;gap:10px}
-  h2 .n{font-size:12px;background:var(--card2);border:1px solid var(--border);color:var(--muted);
-        width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:none;font-weight:700}
-  .sub{color:var(--muted);margin:0 0 20px;font-size:14.5px;max-width:760px}
+  /* ---------- hero ---------- */
+  .hero { padding: 72px 0 56px; }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+  .meta { font: 500 12.5px/1 var(--mono); color: var(--fg-subtle); margin: 0 0 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .meta a { text-decoration: none; color: var(--fg-muted); }
+  .meta a:hover { color: var(--accent); }
+  h1 {
+    font-size: clamp(32px, 4.6vw, 46px); line-height: 1.1; letter-spacing: -.025em;
+    font-weight: 650; margin: 0 0 18px; max-width: 16ch;
+  }
+  .lede { font-size: 17px; color: var(--fg-muted); margin: 0 0 28px; max-width: 34em; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
 
-  .grid{display:grid;gap:12px}
-  .g2{grid-template-columns:repeat(auto-fit,minmax(330px,1fr))}
-  .g3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px;
+    border-radius: var(--radius); border: 1px solid var(--border-strong);
+    background: var(--bg); color: var(--fg);
+    font: 500 14px/1 var(--sans); text-decoration: none; cursor: pointer;
+    transition: background-color .12s, border-color .12s;
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn-primary { background: var(--invert-bg); color: var(--invert-fg); border-color: var(--invert-bg); }
+  .btn-primary:hover { background: var(--invert-bg); opacity: .88; }
 
-  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
-  .card h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:8px}
-  .card p{margin:0 0 12px;color:var(--muted);font-size:13.2px;line-height:1.55}
-  .card p:last-child{margin-bottom:0}
+  .install {
+    display: inline-flex; align-items: center; gap: 14px; max-width: 100%;
+    height: 40px; padding: 0 6px 0 14px;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle);
+    font: 13.5px/1 var(--mono);
+  }
+  .install .prompt { color: var(--fg-subtle); user-select: none; margin-right: -6px; }
+  .install code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: none; border: 0; padding: 0; font-size: inherit; }
 
-  .row{display:flex;gap:7px;flex-wrap:wrap}
-  .b{border:1px solid var(--border);background:var(--card2);color:var(--fg);border-radius:8px;
-     padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;transition:.14s}
-  .b:hover{transform:translateY(-1px);border-color:#3b4470}
-  .b:focus-visible{outline:2px solid var(--purple);outline-offset:2px}
-  .b--log{color:var(--blue)}.b--info{color:#7dd3fc}.b--debug{color:var(--purple)}
-  .b--ok{color:var(--green)}.b--warn{color:var(--amber)}.b--err{color:var(--red)}
+  .copy {
+    flex: none; height: 28px; padding: 0 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted);
+    font: 500 12px/1 var(--sans); cursor: pointer;
+  }
+  .copy:hover { color: var(--fg); border-color: var(--border-strong); }
 
-  .note{font-size:12.5px;color:var(--muted);border-left:2px solid var(--purple);padding:2px 0 2px 12px;margin-top:12px}
-  .note b{color:var(--fg)}
+  /* ---------- code windows ---------- */
+  .code {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--bg-subtle);
+    overflow: hidden; min-width: 0;
+  }
+  .code-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 0 8px 0 14px; height: 42px; border-bottom: 1px solid var(--border);
+  }
+  .code-title { font-size: 13px; font-weight: 500; }
+  .code-file { font: 12px/1 var(--mono); color: var(--fg-subtle); margin-left: 8px; }
+  .code pre { margin: 0; padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.65; }
+  .c { color: var(--syn-comment); }
+  .k { color: var(--syn-keyword); }
+  .s { color: var(--syn-string); }
+  .f { color: var(--syn-fn); }
+  .p { color: var(--syn-prop); }
 
-  table{width:100%;border-collapse:collapse;font-size:13.5px;overflow:hidden;border-radius:var(--radius)}
-  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--border)}
-  th{background:var(--card2);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-  td{background:var(--card)}
-  tbody tr:last-child td{border-bottom:none}
-  .yes{color:var(--green);font-weight:700}.no{color:#5b638c}
-  .tbl-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
+  /* ---------- facts ---------- */
+  .facts {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+  .fact { padding: 22px 24px; }
+  .fact + .fact { border-left: 1px solid var(--border); }
+  .fact strong { display: block; font-size: 22px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 2px; }
+  .fact span { font-size: 13.5px; color: var(--fg-muted); }
 
-  pre{background:#0d1020;border:1px solid var(--border);border-radius:12px;padding:16px;overflow-x:auto;
-      font-size:13px;line-height:1.6;margin:0}
-  pre .c{color:#5f6996}.pre .k{color:var(--pink)}
-  .k{color:var(--pink)}.s{color:var(--green)}.f{color:var(--blue)}.p{color:var(--purple)}
+  /* ---------- sections ---------- */
+  .section { padding: 80px 0 0; }
+  .section-head { margin-bottom: 28px; max-width: 680px; }
+  h2 { font-size: 26px; line-height: 1.25; letter-spacing: -.02em; font-weight: 600; margin: 0 0 10px; }
+  .section-head p { margin: 0; color: var(--fg-muted); }
+  .section-head p + p { margin-top: 8px; }
 
-  .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
-  select,input[type=number]{background:#0d1020;color:var(--fg);border:1px solid var(--border);
-      border-radius:8px;padding:8px 10px;font:inherit;font-size:13px}
-  .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--fg);font-weight:500;cursor:pointer}
-  .cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:14px}
+  /* playground: one bordered list, a row per feature */
+  .demo-list { border: 1px solid var(--border); border-radius: 10px; }
+  .demo-row {
+    display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px;
+    padding: 20px 24px; align-items: start;
+  }
+  .demo-row + .demo-row { border-top: 1px solid var(--border); }
+  .demo-row h3 { font-size: 14.5px; font-weight: 600; margin: 0 0 4px; }
+  .demo-row p { font-size: 13.5px; color: var(--fg-muted); margin: 0; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
 
-  footer{padding:44px 0 70px;text-align:center;color:var(--muted);font-size:13.5px;border-top:1px solid var(--border);margin-top:36px}
+  .b {
+    display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px;
+    border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); color: var(--fg);
+    font: 500 13px/1 var(--sans); cursor: pointer; transition: background-color .12s, border-color .12s;
+  }
+  .b:hover { background: var(--bg-hover); }
+  .b:active { transform: translateY(1px); }
+  .b.mono { font-family: var(--mono); font-size: 12.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: currentColor; }
+  .dot.log { color: var(--lv-log); } .dot.info { color: var(--lv-info); } .dot.debug { color: var(--lv-debug); }
+  .dot.success { color: var(--lv-success); } .dot.warn { color: var(--lv-warn); } .dot.error { color: var(--lv-error); }
 
-  .toast{position:fixed;bottom:20px;left:50%;transform:translate(-50%,90px);background:var(--card2);
-    border:1px solid var(--border);color:var(--fg);padding:11px 20px;border-radius:999px;font-size:13.5px;
-    font-weight:600;z-index:2147483001;transition:transform .28s cubic-bezier(.2,.9,.3,1.2);pointer-events:none}
-  .toast.on{transform:translate(-50%,0)}
+  /* options */
+  .options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .options-form { padding: 24px; }
+  .options .code { border: 0; border-left: 1px solid var(--border); border-radius: 0; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+  .field select, .field input {
+    height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--border-strong);
+    background: var(--bg); color: var(--fg); font: 14px/1 var(--sans); width: 100%;
+  }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 0 0 24px; padding: 0; border: 0; }
+  .checks legend { font-size: 13px; font-weight: 500; margin-bottom: 10px; padding: 0; }
+  .check { display: flex; align-items: center; gap: 8px; font: 13px/1.3 var(--mono); cursor: pointer; }
+  .check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+  .form-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 20px; border-top: 1px solid var(--border); }
+  .b-primary { background: var(--invert-bg); color: var(--invert-fg); border-color: var(--invert-bg); }
+  .b-primary:hover { background: var(--invert-bg); opacity: .88; }
+  .hint { font-size: 13px; color: var(--fg-muted); margin: 14px 0 0; }
 
-  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-  @media (max-width:640px){header{padding:44px 0 28px}section{padding:26px 0}}
+  /* usage */
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+  /* changes table */
+  .table-wrap { border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 620px; }
+  th, td { text-align: left; padding: 11px 18px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th { font-size: 12px; font-weight: 500; color: var(--fg-muted); background: var(--bg-subtle); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.old { color: var(--fg-subtle); }
+  .more { margin: 16px 0 0; font-size: 14px; }
+  .release { font-size: 16px; font-weight: 600; margin: 0 0 12px; display: flex; align-items: baseline; gap: 10px; }
+  .release span { font-size: 14px; font-weight: 400; color: var(--fg-muted); }
+  .notes { margin: 0 0 40px; padding-left: 20px; color: var(--fg-muted); font-size: 14.5px; max-width: 760px; }
+  .notes li + li { margin-top: 6px; }
+  .more a { color: var(--accent); text-decoration: none; }
+  .more a:hover { text-decoration: underline; }
+
+  /* features */
+  .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 40px; }
+  .feature { padding: 20px 0; border-top: 1px solid var(--border); }
+  .feature h3 { font-size: 14.5px; font-weight: 600; margin: 0 0 4px; }
+  .feature p { font-size: 13.5px; color: var(--fg-muted); margin: 0; }
+
+  /* footer */
+  footer { margin-top: 96px; border-top: 1px solid var(--border); padding: 32px 0 48px; font-size: 13.5px; color: var(--fg-muted); }
+  .foot { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  .foot nav { display: flex; gap: 20px; flex-wrap: wrap; }
+  .foot a { text-decoration: none; }
+  .foot a:hover { color: var(--fg); }
+  .credit { display: inline-flex; align-items: center; gap: 9px; margin-top: 24px; text-decoration: none; color: var(--fg-muted); font-size: 13.5px; }
+  .credit:hover { color: var(--fg); }
+  .credit strong { font-weight: 600; color: var(--fg); }
+  .foot-note { margin: 16px 0 0; font-size: 12.5px; color: var(--fg-subtle); max-width: 640px; }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; z-index: 2147483001;
+    transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
+    background: var(--invert-bg); color: var(--invert-fg);
+    padding: 10px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 500;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
+    transition: opacity .18s, transform .18s; max-width: calc(100vw - 32px);
+  }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+
+  @media (max-width: 920px) {
+    .hero-grid, .options { grid-template-columns: minmax(0, 1fr); }
+    .hero-grid { gap: 40px; }
+    .options .code { border-left: 0; border-top: 1px solid var(--border); }
+    .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .demo-row { grid-template-columns: 240px minmax(0, 1fr); gap: 24px; }
+  }
+  @media (max-width: 720px) {
+    .container { padding: 0 16px; }
+    .nav-links { display: none; }
+    .nav .container { justify-content: space-between; }
+    .hero { padding: 48px 0 40px; }
+    .facts { grid-template-columns: 1fr 1fr; }
+    .fact { padding: 18px 16px; }
+    .fact:nth-child(3) { border-left: 0; }
+    .fact:nth-child(n + 3) { border-top: 1px solid var(--border); }
+    .section { padding-top: 64px; }
+    .demo-row { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 18px 16px; }
+    .grid-2, .features, .fields, .checks { grid-template-columns: minmax(0, 1fr); }
+    .options-form { padding: 18px 16px; }
+  }
+  @media (max-width: 400px) {
+    .version { display: none; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="wrap">
-    <div class="logo">🍬</div>
-    <h1>Candy Logger</h1>
-    <p class="tag">A browser console panel that <b>can't crash your app</b> — safe serialization, real stack traces, CSP-friendly, zero dependencies.</p>
-    <div class="pills">
-      <span class="pill">core <b>~6 kB</b> gzip</span>
-      <span class="pill">panel lazy-loads</span>
-      <span class="pill">0 dependencies</span>
-      <span class="pill">TypeScript-first</span>
-      <span class="pill pill--good">✓ 103 tests</span>
-    </div>
-    <div class="cta">
-      <button class="btn btn--primary" id="demo-start">▶ Launch the panel</button>
-      <a class="btn" href="#playground">Try every feature</a>
-      <a class="btn" href="https://github.com/shehari007/candy-logger" target="_blank" rel="noopener">GitHub ↗</a>
-    </div>
-    <div class="install">
-      <code id="install-cmd">npm i candy-logger</code>
-      <button class="copy" data-copy="#install-cmd">Copy</button>
+<header class="nav">
+  <div class="container">
+    <a class="brand" href="#top" aria-label="Candy Logger home">
+      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+        <rect width="24" height="24" rx="6" fill="var(--accent)" />
+        <rect x="5" y="7" width="14" height="2" rx="1" fill="#fff" />
+        <rect x="5" y="11" width="10" height="2" rx="1" fill="#fff" />
+        <rect x="5" y="15" width="12" height="2" rx="1" fill="#fff" />
+      </svg>
+      Candy Logger
+      <span class="version">v2.2.0</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#playground">Playground</a>
+      <a href="#options">Options</a>
+      <a href="#usage">Usage</a>
+      <a href="#changes">What's new</a>
+    </nav>
+    <div class="nav-ext">
+      <a class="icon-link" href="https://www.npmjs.com/package/candy-logger" target="_blank" rel="noopener">
+        npm
+      </a>
+      <a class="icon-link" href="https://github.com/shehari007/candy-logger" target="_blank" rel="noopener">
+        GitHub
+      </a>
     </div>
   </div>
 </header>
 
-<div class="wrap">
+<main id="top">
+
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <p class="meta">
+          <a href="https://www.npmjs.com/package/candy-logger" target="_blank" rel="noopener">candy-logger@2.2.0</a>
+          <span aria-hidden="true">/</span>
+          <span>MIT</span>
+          <span aria-hidden="true">/</span>
+          <span>TypeScript</span>
+        </p>
+        <h1>A browser console panel that can't crash your app.</h1>
+        <p class="lede">Candy Logger shows your logs in a searchable table inside the page. It serializes circular objects, Errors with stack traces, Maps, Sets and BigInts without throwing, and it works under a strict Content Security Policy.</p>
+        <div class="actions">
+          <button class="btn btn-primary" id="demo-start" type="button">Open the panel</button>
+          <a class="btn" href="https://www.npmjs.com/package/candy-logger" target="_blank" rel="noopener">
+            View on npm
+          </a>
+          <a class="btn" href="https://github.com/shehari007/candy-logger" target="_blank" rel="noopener">
+            Source
+          </a>
+        </div>
+        <div class="install">
+          <span class="prompt" aria-hidden="true">$</span>
+          <code id="install-cmd">npm install candy-logger</code>
+          <button class="copy" type="button" data-copy="#install-cmd" aria-label="Copy install command">Copy</button>
+        </div>
+      </div>
+
+      <div class="code">
+        <div class="code-head">
+          <span class="code-title">Quick start<span class="code-file">main.ts</span></span>
+          <button class="copy" type="button" data-copy="#code-hero">Copy</button>
+        </div>
+<pre><code id="code-hero"><span class="k">import</span> { overrideConsole } <span class="k">from</span> <span class="s">'candy-logger'</span>;
+
+<span class="c">// Safe to call more than once (StrictMode, HMR)</span>
+<span class="f">overrideConsole</span>({ enabled: <span class="k">import</span>.meta.env.<span class="p">DEV</span> });
+
+console.<span class="f">log</span>(<span class="s">'Signed in'</span>, { userId: <span class="p">42</span> });
+console.<span class="f">error</span>(<span class="k">new</span> <span class="f">Error</span>(<span class="s">'Card declined'</span>));
+<span class="c">// Shows up in the panel with its full stack</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="facts">
+      <div class="fact"><strong>~5 kB</strong><span>gzipped core, panel loaded on demand</span></div>
+      <div class="fact"><strong>0</strong><span>runtime dependencies</span></div>
+      <div class="fact"><strong>134</strong><span>tests, including this page</span></div>
+      <div class="fact"><strong>ESM, CJS, IIFE</strong><span>with bundled type definitions</span></div>
+    </div>
+  </div>
 
   <!-- ============ playground ============ -->
-  <section id="playground">
-    <h2><span class="n">1</span>Live playground</h2>
-    <p class="sub">Every button below writes to a real Candy Logger panel. Drag it, resize it, pin rows, search, switch themes — it's the actual published build, loaded from <code>./dist/</code>.</p>
-
-    <div class="grid g2">
-      <div class="card">
-        <h3>📊 Log levels</h3>
-        <p>Six levels, each color-coded and independently filterable, with live counts in the toolbar.</p>
-        <div class="row">
-          <button class="b b--log"   data-fire="log">log</button>
-          <button class="b b--info"  data-fire="info">info</button>
-          <button class="b b--debug" data-fire="debug">debug</button>
-          <button class="b b--ok"    data-fire="success">success</button>
-          <button class="b b--warn"  data-fire="warn">warn</button>
-          <button class="b b--err"   data-fire="error">error</button>
-        </div>
+  <section class="section" id="playground">
+    <div class="container">
+      <div class="section-head">
+        <h2>Playground</h2>
+        <p>Each button writes to a live panel built from this repository's <code>dist/</code> output. Drag it, resize it, filter by level, search and pin rows.</p>
+        <p>Your browser's devtools console still receives the original objects, so you can compare the two side by side.</p>
       </div>
 
-      <div class="card">
-        <h3>🏷️ Tags &amp; custom actions</h3>
-        <p>Attach colored tags at the call site, or add one inline with the 🏷️ button on any row. Custom actions get the whole entry.</p>
-        <div class="row">
-          <button class="b" data-demo="tag-auth">AUTH tag</button>
-          <button class="b" data-demo="tag-multi">DB + SLOW</button>
-          <button class="b" data-demo="tag-perf">PERF tag</button>
+      <div class="demo-list">
+        <div class="demo-row">
+          <div>
+            <h3>Log levels</h3>
+            <p>Six levels, each with its own filter and a live count in the toolbar.</p>
+          </div>
+          <div class="buttons">
+            <button class="b mono" type="button" data-fire="log"><span class="dot log"></span>log</button>
+            <button class="b mono" type="button" data-fire="info"><span class="dot info"></span>info</button>
+            <button class="b mono" type="button" data-fire="debug"><span class="dot debug"></span>debug</button>
+            <button class="b mono" type="button" data-fire="success"><span class="dot success"></span>success</button>
+            <button class="b mono" type="button" data-fire="warn"><span class="dot warn"></span>warn</button>
+            <button class="b mono" type="button" data-fire="error"><span class="dot error"></span>error</button>
+          </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h3>🧨 Things that used to crash it</h3>
-        <p>v2.0 threw a <code>TypeError</code> out of <code>console.log</code> on a circular object. These all render safely now — that's the headline fix.</p>
-        <div class="row">
-          <button class="b b--err"  data-demo="circular">Circular object</button>
-          <button class="b b--err"  data-demo="error">Error + stack</button>
-          <button class="b b--warn" data-demo="bigint">BigInt</button>
-          <button class="b b--warn" data-demo="exotic">Map / Set / Date</button>
-          <button class="b b--warn" data-demo="dom">DOM node</button>
-          <button class="b b--warn" data-demo="getter">Throwing getter</button>
+        <div class="demo-row">
+          <div>
+            <h3>Tags</h3>
+            <p>Coloured labels attached at the call site. Any row can also be tagged from the panel.</p>
+          </div>
+          <div class="buttons">
+            <button class="b" type="button" data-demo="tag-auth">AUTH</button>
+            <button class="b" type="button" data-demo="tag-multi">DB + SLOW</button>
+            <button class="b" type="button" data-demo="tag-perf">PERF</button>
+          </div>
         </div>
-        <div class="note"><b>Try it:</b> open devtools and confirm the native console still receives the real, fully-inspectable objects — the panel never replaces them with copies.</div>
-      </div>
 
-      <div class="card">
-        <h3>🛡️ Injection safety</h3>
-        <p>A logger's whole job is displaying untrusted data. These payloads all render as <em>text</em> — object keys, tag labels and action labels included.</p>
-        <div class="row">
-          <button class="b" data-demo="xss-key">Malicious object key</button>
-          <button class="b" data-demo="xss-tag">Malicious tag label</button>
-          <button class="b" data-demo="xss-msg">Script tag in message</button>
+        <div class="demo-row">
+          <div>
+            <h3>Hard-to-serialize values</h3>
+            <p>Inputs that make <code>JSON.stringify</code> throw or silently drop data.</p>
+          </div>
+          <div class="buttons">
+            <button class="b" type="button" data-demo="circular">Circular reference</button>
+            <button class="b" type="button" data-demo="error">Error with stack</button>
+            <button class="b" type="button" data-demo="bigint">BigInt</button>
+            <button class="b" type="button" data-demo="exotic">Map, Set, Date</button>
+            <button class="b" type="button" data-demo="dom">DOM node</button>
+            <button class="b" type="button" data-demo="getter">Throwing getter</button>
+          </div>
         </div>
-        <div class="note">If any of these were still vulnerable, you'd see an <code>alert()</code>. You won't — every cell is built with <code>textContent</code>, never <code>innerHTML</code>.</div>
-      </div>
 
-      <div class="card">
-        <h3>📦 JSON viewer</h3>
-        <p>Objects collapse to a preview and expand into syntax-highlighted JSON with a copy button. Keys and strings are actually highlighted now.</p>
-        <div class="row">
-          <button class="b" data-demo="json-small">Small object</button>
-          <button class="b" data-demo="json-api">API response</button>
-          <button class="b" data-demo="json-deep">Deeply nested</button>
-          <button class="b" data-demo="json-huge">10k-key object</button>
+        <div class="demo-row">
+          <div>
+            <h3>Untrusted input</h3>
+            <p>Every cell is built with <code>textContent</code>. If one of these payloads executed, you would see an alert.</p>
+          </div>
+          <div class="buttons">
+            <button class="b" type="button" data-demo="xss-key">HTML in an object key</button>
+            <button class="b" type="button" data-demo="xss-tag">HTML in a tag label</button>
+            <button class="b" type="button" data-demo="xss-msg">Script tag in a message</button>
+          </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h3>💅 Console format specifiers</h3>
-        <p><code>%s %d %i %f %o %c</code> are applied the way browsers do — so framework banners read correctly instead of leaking raw CSS.</p>
-        <div class="row">
-          <button class="b" data-demo="fmt-basic">%s / %d</button>
-          <button class="b" data-demo="fmt-css">%c banner</button>
-          <button class="b" data-demo="fmt-obj">%o object</button>
+        <div class="demo-row">
+          <div>
+            <h3>Objects</h3>
+            <p>Collapsed previews that expand into highlighted JSON. Depth and size are capped.</p>
+          </div>
+          <div class="buttons">
+            <button class="b" type="button" data-demo="json-small">Small object</button>
+            <button class="b" type="button" data-demo="json-api">API response</button>
+            <button class="b" type="button" data-demo="json-deep">25 levels deep</button>
+            <button class="b" type="button" data-demo="json-huge">10,000 keys</button>
+          </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h3>⚡ Throughput &amp; retention</h3>
-        <p>Sticky-bottom scrolling: scroll up to read and the panel stops yanking you down, showing a “N new” pill instead.</p>
-        <div class="row">
-          <button class="b" data-demo="burst">Burst 500 logs</button>
-          <button class="b" data-demo="stream">Stream 10/s</button>
-          <button class="b" data-demo="stop">Stop stream</button>
+        <div class="demo-row">
+          <div>
+            <h3>Format specifiers</h3>
+            <p><code>%s %d %i %f %o %c</code> are applied the way browser devtools apply them.</p>
+          </div>
+          <div class="buttons">
+            <button class="b mono" type="button" data-demo="fmt-basic">%s %d %f</button>
+            <button class="b mono" type="button" data-demo="fmt-css">%c</button>
+            <button class="b mono" type="button" data-demo="fmt-obj">%o</button>
+          </div>
         </div>
-        <div class="note"><b>Pinned rows are exempt from <code>maxLogs</code>.</b> Pin a row with 📌, then fire a burst — it survives, and it comes back after a reload.</div>
-      </div>
 
-      <div class="card">
-        <h3>🔌 Headless capture &amp; sinks</h3>
-        <p>The store is the source of truth, so <code>getLogs()</code> works with no panel at all — and you can pipe entries anywhere.</p>
-        <div class="row">
-          <button class="b" data-demo="stats">Read getStats()</button>
-          <button class="b" data-demo="sink">Attach a sink</button>
-          <button class="b" data-demo="override">Override console</button>
-          <button class="b" data-demo="restore">Restore console</button>
+        <div class="demo-row">
+          <div>
+            <h3>High volume</h3>
+            <p>Scroll up while logs arrive and the panel keeps your position. Pinned rows are never evicted by <code>maxLogs</code>.</p>
+          </div>
+          <div class="buttons">
+            <button class="b" type="button" data-demo="burst">Log 500 rows</button>
+            <button class="b" type="button" data-demo="stream">Stream 10 per second</button>
+            <button class="b" type="button" data-demo="stop">Stop stream</button>
+          </div>
+        </div>
+
+        <div class="demo-row">
+          <div>
+            <h3>Store and sinks</h3>
+            <p>The store works without a panel, and sinks receive every entry as it is written.</p>
+          </div>
+          <div class="buttons">
+            <button class="b mono" type="button" data-demo="stats">getStats()</button>
+            <button class="b mono" type="button" data-demo="sink">addSink()</button>
+            <button class="b mono" type="button" data-demo="override">captureConsole()</button>
+            <button class="b mono" type="button" data-demo="restore">restoreConsole()</button>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ============ config ============ -->
-  <section>
-    <h2><span class="n">2</span>Configure the panel</h2>
-    <p class="sub">Change anything and the panel is rebuilt with your options. Every option here does something — v2.0 shipped four that were silently ignored.</p>
-    <div class="card">
-      <div class="cfg">
-        <label class="fld">Theme
-          <select id="opt-theme"><option value="dark">dark</option><option value="light">light</option><option value="auto">auto (system)</option></select>
-        </label>
-        <label class="fld">Position
-          <select id="opt-position">
-            <option value="bottom-right">bottom-right</option><option value="bottom-left">bottom-left</option>
-            <option value="top-right">top-right</option><option value="top-left">top-left</option>
-            <option value="full-bottom">full-bottom</option>
-          </select>
-        </label>
-        <label class="fld">Max logs
-          <input type="number" id="opt-maxlogs" value="500" min="5" max="5000" step="5" />
-        </label>
-        <label class="fld">Badge text
-          <input type="text" id="opt-badge" value="DEMO" style="background:#0d1020;color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px" />
-        </label>
+  <!-- ============ options ============ -->
+  <section class="section" id="options">
+    <div class="container">
+      <div class="section-head">
+        <h2>Options</h2>
+        <p>Pick a configuration and apply it. The panel is destroyed and recreated with exactly the options shown on the right.</p>
       </div>
-      <div class="row" style="gap:16px;margin-bottom:16px">
-        <label class="chk"><input type="checkbox" id="opt-timestamp" checked /> showTimestamp</label>
-        <label class="chk"><input type="checkbox" id="opt-tags" checked /> tags column</label>
-        <label class="chk"><input type="checkbox" id="opt-collapsed" /> start collapsed</label>
-        <label class="chk"><input type="checkbox" id="opt-dim" /> dimWhenIdle</label>
-        <label class="chk"><input type="checkbox" id="opt-actions" checked /> custom action</label>
+
+      <div class="options">
+        <div class="options-form">
+          <div class="fields">
+            <label class="field">Theme
+              <select id="opt-theme">
+                <option value="auto" selected>auto</option>
+                <option value="dark">dark</option>
+                <option value="light">light</option>
+              </select>
+            </label>
+            <label class="field">Position
+              <select id="opt-position">
+                <option value="bottom-right">bottom-right</option>
+                <option value="bottom-left">bottom-left</option>
+                <option value="top-right">top-right</option>
+                <option value="top-left">top-left</option>
+                <option value="full-bottom">full-bottom</option>
+              </select>
+            </label>
+            <label class="field">Max logs
+              <input type="number" id="opt-maxlogs" value="500" min="5" max="5000" step="5" />
+            </label>
+            <label class="field">Badge text
+              <input type="text" id="opt-badge" value="DEMO" maxlength="12" />
+            </label>
+          </div>
+
+          <fieldset class="checks">
+            <legend>Flags</legend>
+            <label class="check"><input type="checkbox" id="opt-timestamp" checked /> showTimestamp</label>
+            <label class="check"><input type="checkbox" id="opt-tags" checked /> tags</label>
+            <label class="check"><input type="checkbox" id="opt-collapsed" /> collapsed</label>
+            <label class="check"><input type="checkbox" id="opt-dim" /> dimWhenIdle</label>
+            <label class="check"><input type="checkbox" id="opt-actions" checked /> actions</label>
+            <label class="check"><input type="checkbox" id="opt-layout" checked /> persistLayout</label>
+          </fieldset>
+
+          <div class="form-actions">
+            <button class="b b-primary" type="button" id="rebuild">Apply</button>
+            <button class="b" type="button" id="seed">Add sample logs</button>
+            <button class="b mono" type="button" id="destroy">destroy()</button>
+          </div>
+          <p class="hint"><code>destroy()</code> removes the panel, its listeners and its stylesheet, so nothing is left behind after a hot reload.</p>
+        </div>
+
+        <div class="code">
+          <div class="code-head">
+            <span class="code-title">Current config</span>
+            <button class="copy" type="button" data-copy="#opt-code">Copy</button>
+          </div>
+          <pre><code id="opt-code"></code></pre>
+        </div>
       </div>
-      <div class="row">
-        <button class="b" id="rebuild" style="border-color:var(--purple);color:var(--purple)">↻ Rebuild panel</button>
-        <button class="b" id="destroy">✕ destroy()</button>
-        <button class="b" id="seed">Seed sample logs</button>
-      </div>
-      <div class="note"><b>destroy()</b> removes the panel, every listener it added and its stylesheet — nothing leaks across hot reloads. v2.0 had no way to tear the panel down at all.</div>
     </div>
   </section>
 
   <!-- ============ usage ============ -->
-  <section>
-    <h2><span class="n">3</span>Usage</h2>
-    <p class="sub">Three lines to get going. The panel is a lazy dynamic import, so bundlers drop it entirely from builds that never enable it.</p>
-    <div class="grid g2">
-      <div class="card">
-        <h3>Capture <code>console.*</code></h3>
-        <pre><span class="c">// idempotent — StrictMode & HMR safe</span>
-<span class="k">import</span> { overrideConsole } <span class="k">from</span> <span class="s">'candy-logger'</span>;
+  <section class="section" id="usage">
+    <div class="container">
+      <div class="section-head">
+        <h2>Usage</h2>
+        <p>The panel is loaded with a dynamic import, so a production build that never enables it does not include it.</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="code">
+          <div class="code-head">
+            <span class="code-title">Capture <code>console.*</code></span>
+            <button class="copy" type="button" data-copy="#code-capture">Copy</button>
+          </div>
+<pre><code id="code-capture"><span class="k">import</span> { overrideConsole } <span class="k">from</span> <span class="s">'candy-logger'</span>;
 
 <span class="k">const</span> logger = <span class="f">overrideConsole</span>({
-  enabled: import.meta.env.<span class="p">DEV</span>,
+  enabled: <span class="k">import</span>.meta.env.<span class="p">DEV</span>,
 });
 
-console.<span class="f">log</span>(<span class="s">'Hello'</span>, { user: <span class="num">1</span> });</pre>
-      </div>
-      <div class="card">
-        <h3>Use it directly</h3>
-        <pre><span class="k">import</span> { createLogger } <span class="k">from</span> <span class="s">'candy-logger'</span>;
+console.<span class="f">log</span>(<span class="s">'Hello'</span>, { user: <span class="p">1</span> });</code></pre>
+        </div>
+
+        <div class="code">
+          <div class="code-head">
+            <span class="code-title">Use the logger directly</span>
+            <button class="copy" type="button" data-copy="#code-direct">Copy</button>
+          </div>
+<pre><code id="code-direct"><span class="k">import</span> { createLogger } <span class="k">from</span> <span class="s">'candy-logger'</span>;
 
 <span class="k">const</span> log = <span class="f">createLogger</span>({ enabled: <span class="k">true</span> });
 
 log.<span class="f">success</span>(<span class="s">'Build passed'</span>);
-log.<span class="f">error</span>(<span class="k">new</span> <span class="f">Error</span>(<span class="s">'boom'</span>));   <span class="c">// full stack</span>
-log.<span class="f">getLogs</span>();                     <span class="c">// works headless</span></pre>
-      </div>
-      <div class="card">
-        <h3>Ship logs anywhere</h3>
-        <pre><span class="c">// the panel is just one sink</span>
-<span class="k">const</span> off = log.<span class="f">addSink</span>({
+log.<span class="f">error</span>(<span class="k">new</span> <span class="f">Error</span>(<span class="s">'boom'</span>)); <span class="c">// full stack</span>
+log.<span class="f">getLogs</span>();                   <span class="c">// works without a panel</span></code></pre>
+        </div>
+
+        <div class="code">
+          <div class="code-head">
+            <span class="code-title">Send entries elsewhere</span>
+            <button class="copy" type="button" data-copy="#code-sink">Copy</button>
+          </div>
+<pre><code id="code-sink"><span class="k">const</span> off = log.<span class="f">addSink</span>({
   <span class="f">write</span>(entry) {
     <span class="k">if</span> (entry.level === <span class="s">'error'</span>) {
-      <span class="f">fetch</span>(<span class="s">'/api/logs'</span>, {
-        method: <span class="s">'POST'</span>,
-        body: <span class="p">JSON</span>.<span class="f">stringify</span>(entry),
-      });
+      <span class="k">const</span> body = <span class="p">JSON</span>.<span class="f">stringify</span>(entry);
+      navigator.<span class="f">sendBeacon</span>(<span class="s">'/api/logs'</span>, body);
     }
   },
-});</pre>
-      </div>
-      <div class="card">
-        <h3>No build step</h3>
-        <pre><span class="c">&lt;!-- one self-contained file --&gt;</span>
-&lt;<span class="k">script</span> <span class="p">src</span>=<span class="s">"https://unpkg.com/candy-logger@2"</span>&gt;
-&lt;/<span class="k">script</span>&gt;
+});
+
+<span class="f">off</span>(); <span class="c">// detach</span></code></pre>
+        </div>
+
+        <div class="code">
+          <div class="code-head">
+            <span class="code-title">Without a bundler</span>
+            <button class="copy" type="button" data-copy="#code-cdn">Copy</button>
+          </div>
+<pre><code id="code-cdn">&lt;<span class="k">script</span> <span class="p">src</span>=<span class="s">"https://unpkg.com/candy-logger@2"</span>&gt;&lt;/<span class="k">script</span>&gt;
 &lt;<span class="k">script</span>&gt;
   <span class="f">overrideConsole</span>({ enabled: <span class="k">true</span> });
-&lt;/<span class="k">script</span>&gt;</pre>
+&lt;/<span class="k">script</span>&gt;</code></pre>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- ============ why ============ -->
-  <section>
-    <h2><span class="n">4</span>What changed in 2.1</h2>
-    <p class="sub">This release is mostly about correctness. Everything below is covered by a test.</p>
-    <div class="tbl-scroll">
-      <table>
-        <thead><tr><th>Behaviour</th><th style="width:180px">v2.0</th><th style="width:200px">v2.1</th></tr></thead>
-        <tbody>
-          <tr><td><code>console.log(circularObject)</code></td><td class="no">throws TypeError</td><td class="yes">renders <code>[Circular]</code></td></tr>
-          <tr><td><code>console.error(new Error(…))</code></td><td class="no">renders <code>{}</code></td><td class="yes">message + stack</td></tr>
-          <tr><td>Map / Set / BigInt / Date</td><td class="no"><code>{}</code> or throws</td><td class="yes">full contents</td></tr>
-          <tr><td>Object keys from an API</td><td class="no">XSS sink</td><td class="yes">rendered as text</td></tr>
-          <tr><td>Under <code>script-src 'self'</code></td><td class="no">buttons silently dead</td><td class="yes">fully functional</td></tr>
-          <tr><td>Second <code>overrideConsole()</code></td><td class="no">2 panels, doubled logs</td><td class="yes">idempotent</td></tr>
-          <tr><td>Counters past <code>maxLogs</code></td><td class="no">drift forever upward</td><td class="yes">accurate</td></tr>
-          <tr><td>Pinned rows vs eviction</td><td class="no">silently dropped</td><td class="yes">exempt from the cap</td></tr>
-          <tr><td>Searching inside collapsed JSON</td><td class="no">false negatives</td><td class="yes">searches the model</td></tr>
-          <tr><td>JSON keys &amp; strings highlighted</td><td class="no">never matched</td><td class="yes">highlighted</td></tr>
-          <tr><td>Light-theme level badges</td><td class="no">~1.6:1 contrast</td><td class="yes">WCAG AA</td></tr>
-          <tr><td>Drag on touch devices</td><td class="no">mouse events only</td><td class="yes">pointer events</td></tr>
-          <tr><td>Teardown</td><td class="no">no <code>destroy()</code></td><td class="yes">full cleanup</td></tr>
-          <tr><td><code>getLogs()</code> without a panel</td><td class="no">always <code>[]</code></td><td class="yes">real entries</td></tr>
-          <tr><td>Production bundle when disabled</td><td class="no">panel always included</td><td class="yes">lazy chunk, shakeable</td></tr>
-        </tbody>
-      </table>
+  <!-- ============ changes ============ -->
+  <section class="section" id="changes">
+    <div class="container">
+      <div class="section-head">
+        <h2>What's new</h2>
+        <p>Release notes for the last two versions. The full history is in the changelog.</p>
+      </div>
+
+      <h3 class="release">2.2 <span>Panel redesign</span></h3>
+      <ul class="notes">
+        <li>A new panel design with SVG icons, a neutral palette, and warning and error rows tinted the way devtools tint them.</li>
+        <li>Row actions appear on hover or focus, and are always visible on touch screens.</li>
+        <li>Messages wrap instead of being cut off, short objects show inline, and timestamps include milliseconds.</li>
+        <li>The panel remembers its position, size, minimized state and theme across reloads (<code>persistLayout</code>).</li>
+        <li>An error count in the header, a <code>nonce</code> option for strict style CSPs, and copy buttons that work over plain HTTP.</li>
+        <li>Fixes for a <code>detachUI()</code> race, Firefox exports, and host-page CSS leaking into the panel.</li>
+      </ul>
+
+      <h3 class="release">2.1 <span>Correctness release</span></h3>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Case</th><th>2.0</th><th>2.1</th></tr></thead>
+          <tbody>
+            <tr><td><code>console.log(circularObject)</code></td><td class="old">Throws TypeError</td><td>Renders <code>[Circular]</code></td></tr>
+            <tr><td><code>console.error(new Error(…))</code></td><td class="old">Renders <code>{}</code></td><td>Message and stack</td></tr>
+            <tr><td>Map, Set, BigInt, Date</td><td class="old"><code>{}</code> or throws</td><td>Full contents</td></tr>
+            <tr><td>Object keys from an API response</td><td class="old">XSS sink</td><td>Rendered as text</td></tr>
+            <tr><td>Under <code>script-src 'self'</code></td><td class="old">Buttons do nothing</td><td>Fully functional</td></tr>
+            <tr><td>Calling <code>overrideConsole()</code> twice</td><td class="old">Two panels, doubled logs</td><td>Idempotent</td></tr>
+            <tr><td>Level counts past <code>maxLogs</code></td><td class="old">Drift upward</td><td>Accurate</td></tr>
+            <tr><td>Pinned rows when the buffer is full</td><td class="old">Dropped</td><td>Exempt from the cap</td></tr>
+            <tr><td>Search inside collapsed JSON</td><td class="old">Missed matches</td><td>Searches the data</td></tr>
+            <tr><td>Light theme level badges</td><td class="old">About 1.6:1 contrast</td><td>WCAG AA</td></tr>
+            <tr><td>Dragging on touch devices</td><td class="old">Mouse only</td><td>Pointer events</td></tr>
+            <tr><td>Teardown</td><td class="old">Not possible</td><td><code>destroy()</code></td></tr>
+            <tr><td><code>getLogs()</code> with no panel</td><td class="old">Always <code>[]</code></td><td>Real entries</td></tr>
+            <tr><td>Production bundle when disabled</td><td class="old">Panel included</td><td>Lazy chunk, tree-shaken</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="more"><a href="https://github.com/shehari007/candy-logger/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Full changelog</a></p>
     </div>
   </section>
 
-  <section>
-    <h2><span class="n">5</span>Feature set</h2>
-    <div class="grid g3">
-      <div class="card"><h3>📊 Table view</h3><p>Time, level, tags, message and per-row actions in a sortable, filterable table.</p></div>
-      <div class="card"><h3>🔍 Model-backed search</h3><p>Debounced search over the log data itself, so collapsed payloads still match.</p></div>
-      <div class="card"><h3>📌 Pins that persist</h3><p>Pinned rows stay on top, survive <code>clear()</code>, ignore <code>maxLogs</code>, and come back after reload.</p></div>
-      <div class="card"><h3>🌗 Real themes</h3><p>Dark, light, or <code>auto</code> following <code>prefers-color-scheme</code> and updating live.</p></div>
-      <div class="card"><h3>♿ Accessible</h3><p>Named buttons, <code>aria-pressed</code> toggles, a polite live region, focus rings, reduced-motion support.</p></div>
-      <div class="card"><h3>📱 Mobile-ready</h3><p>Full-screen sheet under 640px and pointer-event dragging that works on touch.</p></div>
-      <div class="card"><h3>🔌 Sinks</h3><p>Pipe entries to a server, Sentry, or a test spy. The panel is just one consumer.</p></div>
-      <div class="card"><h3>💾 Export</h3><p>Download the buffer as JSON, or copy every line to the clipboard in one click.</p></div>
-      <div class="card"><h3>🪶 Zero deps</h3><p>No runtime dependencies. ~6 kB gzipped core; the panel loads only when enabled.</p></div>
+  <!-- ============ features ============ -->
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-head">
+        <h2>Everything in the box</h2>
+      </div>
+      <div class="features">
+        <div class="feature"><h3>Table view</h3><p>Time, level, tags, message and row actions, with per-level filters.</p></div>
+        <div class="feature"><h3>Search</h3><p>Debounced search over the log data, so text inside collapsed objects still matches.</p></div>
+        <div class="feature"><h3>Pins</h3><p>Pinned rows stay on top, survive <code>clear()</code> and come back after a reload.</p></div>
+        <div class="feature"><h3>Themes</h3><p>Dark, light, or <code>auto</code>, which follows the system setting as it changes.</p></div>
+        <div class="feature"><h3>Accessibility</h3><p>Labelled controls, <code>aria-pressed</code> toggles, a live region and reduced-motion support.</p></div>
+        <div class="feature"><h3>Mobile</h3><p>A full-screen sheet below 640px wide, and dragging that works with touch.</p></div>
+        <div class="feature"><h3>Sinks</h3><p>Forward entries to your server, Sentry or a test spy. The panel is one consumer among many.</p></div>
+        <div class="feature"><h3>Export</h3><p>Download the buffer as JSON or copy every line to the clipboard.</p></div>
+        <div class="feature"><h3>Layout memory</h3><p>Position, size, minimized state and theme survive a reload, until you change the option in code.</p></div>
+        <div class="feature"><h3>Strict CSP</h3><p>No inline scripts or handlers. Pass a <code>nonce</code> if your policy also restricts styles.</p></div>
+        <div class="feature"><h3>No dependencies</h3><p>Nothing to audit beyond the package itself. Ships ESM, CommonJS and a single script file.</p></div>
+      </div>
     </div>
   </section>
 
-</div>
+</main>
 
 <footer>
-  <div class="wrap">
-    <p>MIT · Made with 🍬 by <a href="https://github.com/shehari007" target="_blank" rel="noopener">shehari007</a></p>
-    <p style="font-size:12.5px;opacity:.75">Pinned rows are stored in <code>localStorage</code> as rendered text. Don't pin rows containing secrets, or set <code>persistPins: false</code>.</p>
+  <div class="container">
+    <div class="foot">
+      <span>Candy Logger · MIT License · by <a href="https://github.com/shehari007" target="_blank" rel="noopener">shehari007</a></span>
+      <nav aria-label="Project links">
+        <a href="https://www.npmjs.com/package/candy-logger" target="_blank" rel="noopener">npm</a>
+        <a href="https://github.com/shehari007/candy-logger" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/shehari007/candy-logger/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/shehari007/candy-logger/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+      </nav>
+    </div>
+    <a class="credit" href="https://systronium.com" target="_blank" rel="noopener">
+      <svg viewBox="0 0 157.26 144.54" width="18" height="17" aria-hidden="true">
+        <path fill="currentColor" d="M44.81,111.22v30.51c0,1.55-1.26,2.81-2.81,2.81H2.81c-1.55,0-2.81-1.26-2.81-2.81v-30.51c0-1.55,1.26-2.81,2.81-2.81h39.2c1.55,0,2.81,1.26,2.81,2.81Z"/>
+        <path fill="#ff6a00" d="M49.11,72.27h52.66l48.27,67.83c1.32,1.86,0,4.44-2.29,4.44h-52.66l-48.27-67.83c-1.33-1.86,0-4.44,2.28-4.44Z"/>
+        <path fill="#ff6a00" d="M154.44,72.27h-52.66L53.5,4.44c-1.32-1.86,0-4.44,2.29-4.44h52.66l48.27,67.83c1.32,1.86,0,4.44-2.29,4.44Z"/>
+      </svg>
+      <span>Powered by <strong>Systronium Technologies</strong></span>
+    </a>
+    <p class="foot-note">Pinned rows are saved to <code>localStorage</code> as rendered text. Avoid pinning rows that contain secrets, or set <code>persistPins: false</code>.</p>
   </div>
 </footer>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="./dist/candy-logger.global.js"></script>
 <script src="./demo.js"></script>

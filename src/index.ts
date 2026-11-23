@@ -56,6 +56,8 @@ export class CandyLogger {
   private store: LogStore;
   private panel: PanelInstance | null = null;
   private panelPending: Promise<PanelInstance | null> | null = null;
+  /** Bumped by detachUI(), so an attach that is still loading knows it was cancelled. */
+  private panelGeneration = 0;
   private sinks = new Set<Sink>();
   private defaultTags: LogTag[];
   private options: CandyLoggerOptions;
@@ -71,8 +73,8 @@ export class CandyLogger {
   /* ---------- entry construction ---------- */
 
   private createEntry(level: LogLevel, args: unknown[], tags?: LogTag[]): LogEntry {
-    // formatArgs is total — it cannot throw, for any input. v2.0 called
-    // JSON.stringify directly here, so a circular argument threw out of console.log.
+    // formatArgs is total: it cannot throw, for any input. A plain JSON.stringify
+    // here would throw on a circular argument, straight out of console.log.
     const { message, parts, snapshot, truncated, usedSpecifiers } = formatArgs(args, {
       maxString: this.options.maxString,
       maxDepth: this.options.maxDepth,
@@ -150,9 +152,10 @@ export class CandyLogger {
 
     this.options = { ...this.options, ...options };
     const opts = this.options;
+    const generation = this.panelGeneration;
 
-    this.panelPending = (async () => {
-      // Read the registry before awaiting — TS drops narrowing on a module-level
+    const pending: Promise<PanelInstance | null> = (async () => {
+      // Read the registry before awaiting: TS drops narrowing on a module-level
       // `let` across an await, and the bundled build registers this synchronously.
       const registered = panelFactory;
       const factory: PanelFactory =
@@ -162,17 +165,26 @@ export class CandyLogger {
             (store, o) =>
               new m.CandyLoggerUI(store, o),
         ));
-      if (this.destroyed) return null;
+      // detachUI() or destroy() while the chunk was loading: don't add a panel
+      // nobody asked for any more.
+      if (this.destroyed || generation !== this.panelGeneration) return null;
       // The store already holds everything logged before now, and the panel
-      // backfills from it — so nothing logged during the import is lost.
+      // backfills from it, so nothing logged during the import is lost.
       this.panel = factory(this.store, opts);
       return this.panel;
-    })().catch(() => null);
+    })().catch(() => {
+      // A failed chunk load (flaky network, deploy mid-session) must not block
+      // a later attachUI() call from trying again.
+      if (this.panelPending === pending) this.panelPending = null;
+      return null;
+    });
 
-    return this.panelPending;
+    this.panelPending = pending;
+    return pending;
   }
 
   detachUI(): void {
+    this.panelGeneration++;
     this.panel?.destroy();
     this.panel = null;
     this.panelPending = null;

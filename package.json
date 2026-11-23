@@ -1,7 +1,40 @@
 {
   "name": "candy-logger",
-  "version": "2.1.0",
-  "description": "A browser console panel that can't crash your app — ~6 kB gzipped core with a lazy-loaded UI, zero dependencies, TypeScript-first. Safe serialization (circular refs, Errors with stacks, Map/Set/BigInt), CSP-friendly, table view, tags, pins, search, dark/light themes.",
+  "version": "2.2.0",
+  "description": "An in-page log panel for browser apps. Captures console output into a searchable table with safe serialization of circular objects, Errors, Map, Set and BigInt. Zero dependencies, about 5 kB gzipped core, panel loaded on demand.",
+  "keywords": [
+    "logger",
+    "console",
+    "browser",
+    "debug",
+    "logging",
+    "devtools",
+    "console-panel",
+    "log-viewer",
+    "overlay",
+    "mobile-debug",
+    "error-tracking",
+    "csp",
+    "typescript",
+    "zero-dependency",
+    "react",
+    "vue",
+    "angular",
+    "svelte"
+  ],
+  "homepage": "https://candy-logger.msyb.dev",
+  "bugs": {
+    "url": "https://github.com/shehari007/candy-logger/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shehari007/candy-logger.git"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Muhammad Sheharyar Butt",
+    "url": "https://github.com/shehari007"
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -19,6 +52,14 @@
     "./package.json": "./package.json"
   },
   "sideEffects": false,
+  "files": [
+    "dist",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -26,54 +67,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "demo": "npm run build && npx --yes serve -l 4321 .",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "prepublishOnly": "npm run build && npm run typecheck && npm test",
     "release:patch": "npm version patch && npm publish",
     "release:minor": "npm version minor && npm publish",
     "release:major": "npm version major && npm publish"
-  },
-  "keywords": [
-    "logger",
-    "console",
-    "browser",
-    "debug",
-    "logging",
-    "table",
-    "tags",
-    "ui",
-    "devtools",
-    "developer-tools",
-    "overlay",
-    "console-panel",
-    "mobile-debug",
-    "dark-mode",
-    "typescript",
-    "zero-dependency",
-    "react",
-    "vue",
-    "angular",
-    "svelte"
-  ],
-  "author": "Muhammad Sheharyar Butt",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/shehari007/candy-logger.git"
-  },
-  "homepage": "https://candy-logger.msyb.dev",
-  "bugs": {
-    "url": "https://github.com/shehari007/candy-logger/issues"
-  },
-  "license": "MIT",
-  "engines": {
-    "node": ">=18"
   },
   "devDependencies": {
     "happy-dom": "^20.11.2",
     "tsup": "^8.5.1",
     "typescript": "^5.3.3",
     "vitest": "^4.1.10"
-  },
-  "files": [
-    "dist",
-    "src"
-  ]
+  }
 }

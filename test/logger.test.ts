@@ -232,3 +232,27 @@ describe('lifecycle', () => {
     expect(logger.getLogs().map((l) => l.message)).toEqual(['b']);
   });
 });
+
+describe('panel lifecycle', () => {
+  it('detachUI() during a pending attach leaves no panel behind', async () => {
+    const logger = createLogger();
+    const pending = logger.attachUI();
+    logger.detachUI();
+    expect(await pending).toBeNull();
+    expect(document.querySelector('.candy-logger')).toBeNull();
+    logger.destroy();
+  });
+
+  it('attaches again after a detach', async () => {
+    const logger = createLogger();
+    logger.log('kept in the store');
+    await logger.attachUI();
+    logger.detachUI();
+    const panel = await logger.attachUI();
+    expect(panel).not.toBeNull();
+    expect(document.querySelectorAll('.candy-logger')).toHaveLength(1);
+    expect(document.querySelector('.candy-logger')!.textContent).toContain('kept in the store');
+    logger.destroy();
+    expect(document.querySelector('.candy-logger')).toBeNull();
+  });
+});

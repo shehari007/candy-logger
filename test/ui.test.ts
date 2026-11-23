@@ -54,7 +54,9 @@ describe('injection safety', () => {
   it('renders a malicious tag LABEL as text', () => {
     const { panel } = mount();
     push('log', ['hi'], [{ label: '<svg onload=alert(1)>' }]);
-    expect(panel.querySelector('svg')).toBeNull();
+    // The panel's own icons are SVG, so look where log data lands, and for the handler.
+    expect(panel.querySelector('svg:not(.candy-icon):not(.candy-mark)')).toBeNull();
+    expect(panel.querySelector('[onload]')).toBeNull();
     expect(panel.querySelector('.candy-tag')!.textContent).toBe('<svg onload=alert(1)>');
   });
 
@@ -319,7 +321,7 @@ describe('lifecycle', () => {
     expect(document.querySelector('.candy-logger')).not.toBeNull();
     ui.destroy();
     expect(document.querySelector('.candy-logger')).toBeNull();
-    expect(document.getElementById('candy-logger-styles-v21')).toBeNull();
+    expect(document.getElementById('candy-logger-styles-v22')).toBeNull();
   });
 
   it('destroy() detaches from the store', () => {
@@ -342,5 +344,139 @@ describe('lifecycle', () => {
     expect(ui.element!.textContent).toContain('logged first');
     expect(ui.element!.textContent).toContain('and second');
     expect(ui.element!.querySelector('.candy-log-counter')!.textContent).toBe('2');
+  });
+});
+
+describe('layout memory', () => {
+  const LAYOUT_KEY = 'candy-logger-layout-v22';
+
+  it('remembers a minimized panel across a remount', () => {
+    const { panel } = mount();
+    panel.querySelector<HTMLElement>('[data-act="minimize"]')!.click();
+    ui.destroy();
+    expect(mount().panel.classList.contains('candy-logger--minimized')).toBe(true);
+  });
+
+  it('remembers the theme picked in the panel', () => {
+    const { panel } = mount({ theme: 'dark' });
+    panel.querySelector<HTMLElement>('[data-act="theme"]')!.click();
+    expect(panel.classList.contains('candy-logger--light')).toBe(true);
+    ui.destroy();
+    expect(mount({ theme: 'dark' }).panel.classList.contains('candy-logger--light')).toBe(true);
+  });
+
+  it('lets a changed option win over the saved layout', () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: false, // system prefers dark
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as any);
+    // Saved while the code said theme 'dark' and collapsed true.
+    const saved = { position: 'bottom-right', theme: 'dark', collapsed: true, minimized: true, themeChoice: 'light' };
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(saved));
+    const same = mount({ theme: 'dark', collapsed: true }).panel;
+    expect(same.classList.contains('candy-logger--light')).toBe(true);
+    expect(same.classList.contains('candy-logger--minimized')).toBe(true);
+    ui.destroy();
+
+    // The developer has since changed both options in code.
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(saved));
+    const changed = mount({ theme: 'auto', collapsed: false }).panel;
+    expect(changed.classList.contains('candy-logger--dark')).toBe(true);
+    expect(changed.classList.contains('candy-logger--minimized')).toBe(false);
+  });
+
+  it('restores a saved drag position for the same position option', () => {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({ position: 'bottom-right', theme: 'dark', collapsed: false, x: 40, y: 60 }));
+    const { panel } = mount();
+    expect(panel.style.left).toBe('40px');
+    expect(panel.style.top).toBe('60px');
+    ui.destroy();
+    const other = mount({ position: 'top-left' }).panel;
+    expect(other.style.left).toBe('16px');
+  });
+
+  it('ignores a corrupt layout record', () => {
+    localStorage.setItem(LAYOUT_KEY, '{not json');
+    expect(() => mount()).not.toThrow();
+    expect(ui.element!.classList.contains('candy-logger--minimized')).toBe(false);
+  });
+
+  it('writes nothing when persistLayout is false', () => {
+    const { panel } = mount({ persistLayout: false });
+    panel.querySelector<HTMLElement>('[data-act="minimize"]')!.click();
+    expect(localStorage.getItem(LAYOUT_KEY)).toBeNull();
+  });
+});
+
+describe('panel details', () => {
+  it('does not let an explicit undefined option override a default', () => {
+    const { panel } = mount({ position: undefined, theme: undefined });
+    expect(panel.style.right).toBe('16px');
+    expect(panel.classList.contains('candy-logger--dark')).toBe(true);
+  });
+
+  it('shows short objects inline and collapses long ones', () => {
+    const { panel } = mount();
+    const short = push('log', [{ ok: true, count: 3 }]);
+    const long = push('log', [{ text: 'x'.repeat(200) }]);
+    const shortRow = panel.querySelector(`tr[data-id="${short.id}"]`)!;
+    const longRow = panel.querySelector(`tr[data-id="${long.id}"]`)!;
+    expect(shortRow.querySelector('.candy-json-toggle')).toBeNull();
+    expect(shortRow.querySelector('.candy-td--message')!.textContent).toBe('{"ok": true, "count": 3}');
+    expect(longRow.querySelector('.candy-json-toggle')).not.toBeNull();
+  });
+
+  it('expands an Error into its stack and extra fields', () => {
+    const { panel } = mount();
+    const err = Object.assign(new Error('declined'), { code: 'E_CARD' });
+    const e = push('error', [err]);
+    panel.querySelector<HTMLElement>(`tr[data-id="${e.id}"] .candy-json-toggle`)!.click();
+    const detail = panel.querySelector('.candy-detail-row')!;
+    expect(detail.textContent).toContain('Error: declined');
+    expect(detail.textContent).toContain('E_CARD');
+    expect(detail.getAttribute('data-level')).toBe('error');
+  });
+
+  it('says so when a filter hides every row', () => {
+    const { panel } = mount();
+    push('log', ['only a log']);
+    panel.querySelector<HTMLElement>('.candy-fbtn[data-level="error"]')!.click();
+    const empty = panel.querySelector('.candy-empty')!;
+    expect(empty.classList.contains('hidden')).toBe(false);
+    expect(empty.textContent).toContain('No matching logs');
+  });
+
+  it('shows an error count in the header only when there are errors', () => {
+    const { panel } = mount();
+    const badge = panel.querySelector<HTMLElement>('.candy-errcount')!;
+    push('log', ['fine']);
+    expect(badge.hidden).toBe(true);
+    push('error', ['bad']);
+    push('error', ['worse']);
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe('2');
+  });
+
+  it('adds a tag from the row and keeps it searchable', () => {
+    const { panel } = mount();
+    const e = push('log', ['tag me']);
+    panel.querySelector<HTMLElement>(`tr[data-id="${e.id}"] .candy-abtn--tag`)!.click();
+    const input = panel.querySelector<HTMLInputElement>(`tr[data-id="${e.id}"] .candy-tag-input`)!;
+    input.value = 'checkout';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(panel.querySelector(`tr[data-id="${e.id}"] .candy-tag`)!.textContent).toBe('CHECKOUT');
+    expect(store.get(e.id)!.search).toContain('checkout');
+  });
+
+  it('only offers the keep-visible toggle when the panel dims', () => {
+    expect(mount().panel.querySelector('[data-act="pin"]')).toBeNull();
+    ui.destroy();
+    expect(mount({ dimWhenIdle: true }).panel.querySelector('[data-act="pin"]')).not.toBeNull();
+  });
+
+  it('puts the nonce on the injected stylesheet', () => {
+    mount({ nonce: 'abc123' });
+    expect((document.getElementById('candy-logger-styles-v22') as HTMLStyleElement).nonce).toBe('abc123');
   });
 });

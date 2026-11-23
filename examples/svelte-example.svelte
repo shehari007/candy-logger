@@ -1,5 +1,5 @@
 <script>
-  // Svelte — Candy Logger v2.1
+  // Svelte
   import { onDestroy, onMount } from 'svelte';
   import { createLogger } from 'candy-logger';
 

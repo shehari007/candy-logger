@@ -1,4 +1,4 @@
-// Plain JS / no framework — Candy Logger v2.1
+// Plain JS, no framework
 import { overrideConsole, restoreConsole, createLogger } from 'candy-logger';
 
 /* ---------------------------------------------------------------- *
@@ -17,7 +17,7 @@ console.warn('Heads up');
 console.error('Something failed', new Error('CARD_DECLINED'));
 
 /* ---------------------------------------------------------------- *
- * 2. Things that used to crash the logger — all safe now            *
+ * 2. Values that would make JSON.stringify throw                    *
  * ---------------------------------------------------------------- */
 const circular = { name: 'root' };
 circular.self = circular;
@@ -25,7 +25,7 @@ console.log('Circular graph', circular); // → "[Circular]"
 
 console.log('Exotic values', new Map([['k', 'v']]), new Set([1, 2]), 10n, new Date(), document.body);
 
-console.log('%c BANNER %c styled via %%c', 'background:#ff6ba8;color:#fff;padding:2px 6px', 'color:#4ade80');
+console.log('%c BANNER %c styled via %%c', 'background:#d6336c;color:#fff;padding:2px 6px', 'color:#4ade80');
 console.log('%s scored %d points', 'Alice', 42);
 
 /* ---------------------------------------------------------------- *

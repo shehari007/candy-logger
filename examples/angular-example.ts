@@ -1,4 +1,4 @@
-// Angular — Candy Logger v2.1
+// Angular
 import { ErrorHandler, Injectable } from '@angular/core';
 import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
 import { overrideConsole, type CandyLogger } from 'candy-logger';

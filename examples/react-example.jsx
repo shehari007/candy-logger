@@ -1,8 +1,8 @@
-// React / Next.js — Candy Logger v2.1
+// React / Next.js
 //
 // overrideConsole() is idempotent, so StrictMode's double-invoke and Fast Refresh
 // re-runs reuse the same logger instead of stacking panels.
-import { useEffect } from 'react';
+import { Component, useEffect } from 'react';
 import { overrideConsole } from 'candy-logger';
 
 // Call once, as high in the tree as possible (main.jsx / a client component).
@@ -10,12 +10,12 @@ const logger = overrideConsole({
   enabled: import.meta.env.DEV, // Next.js: process.env.NODE_ENV !== 'production'
   theme: 'auto',
   badgeText: 'DEV',
-  defaultTags: [{ label: 'WEB', color: '#7aa2f7' }],
+  defaultTags: [{ label: 'WEB', color: '#2563eb' }],
 });
 
 export default function App() {
   useEffect(() => {
-    logger.success('React app started 🎉');
+    logger.success('React app started');
 
     // Errors keep their message, stack and custom fields — not `{}`.
     fetch('/api/profile')
@@ -38,7 +38,7 @@ export default function App() {
 }
 
 // Error boundaries pair well with the panel:
-export class LoggingErrorBoundary extends React.Component {
+export class LoggingErrorBoundary extends Component {
   static getDerivedStateFromError() {
     return { crashed: true };
   }

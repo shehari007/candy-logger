@@ -80,7 +80,8 @@ describe.skipIf(!hasBuild)('demo page', () => {
     click('[data-demo="xss-msg"]');
     expect(panel()!.querySelector('img')).toBeNull();
     expect(panel()!.querySelector('script')).toBeNull();
-    expect(panel()!.querySelector('svg')).toBeNull();
+    // The panel's own icons are SVG; anything else would have come from log data.
+    expect(panel()!.querySelector('svg:not(.candy-icon):not(.candy-mark)')).toBeNull();
     expect(panelText()).toContain('onerror'); // present as text, not as an attribute
 
     let inlineHandlers = 0;
@@ -125,6 +126,6 @@ describe.skipIf(!hasBuild)('demo page', () => {
   it('destroy() removes the panel and its stylesheet', () => {
     click('#destroy');
     expect(document.querySelectorAll('.candy-logger').length).toBe(0);
-    expect(document.getElementById('candy-logger-styles-v21')).toBeNull();
+    expect(document.getElementById('candy-logger-styles-v22')).toBeNull();
   });
 });

@@ -20,14 +20,14 @@
       showTimestamp: document.getElementById('opt-timestamp').checked,
       tags: document.getElementById('opt-tags').checked,
       collapsed: document.getElementById('opt-collapsed').checked,
-      dimWhenIdle: document.getElementById('opt-dim').checked
+      dimWhenIdle: document.getElementById('opt-dim').checked,
+      persistLayout: document.getElementById('opt-layout').checked
     };
     if (document.getElementById('opt-actions').checked) {
       opts.actions = [{
-        // An apostrophe here used to produce a dead button (or worse). Now the
-        // panel dispatches by index, so the label is inert text.
-        label: "Inspect in devtools (it's safe now)",
-        icon: '🔎',
+        // The apostrophe is deliberate: actions are dispatched by index, so a
+        // label is only ever text.
+        label: "Log this entry to devtools (it's inert text)",
         onClick: function (entry) {
           console.info('[custom action] entry:', entry);
           toast('Custom action fired — check devtools');
@@ -36,6 +36,51 @@
     }
     return opts;
   }
+
+  /* --- live preview of the options object --- */
+  var codeEl = document.getElementById('opt-code');
+
+  function span(cls, text) {
+    var s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    return s;
+  }
+
+  function renderOptions() {
+    if (!codeEl) return;
+    var o = options();
+    var frag = document.createDocumentFragment();
+    frag.appendChild(span('f', 'createLogger'));
+    frag.appendChild(document.createTextNode('({\n'));
+    Object.keys(o).forEach(function (key) {
+      var v = o[key];
+      if (v === undefined) return;
+      frag.appendChild(document.createTextNode('  ' + key + ': '));
+      if (key === 'actions') {
+        frag.appendChild(document.createTextNode('[{ label: '));
+        frag.appendChild(span('s', "'Inspect'"));
+        frag.appendChild(document.createTextNode(', onClick }]'));
+      } else if (typeof v === 'string') {
+        frag.appendChild(span('s', "'" + v.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"));
+      } else if (typeof v === 'number') {
+        frag.appendChild(span('p', String(v)));
+      } else {
+        frag.appendChild(span('k', String(v)));
+      }
+      frag.appendChild(document.createTextNode(',\n'));
+    });
+    frag.appendChild(document.createTextNode('});'));
+    codeEl.textContent = '';
+    codeEl.appendChild(frag);
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('[id^="opt-"]'), function (el) {
+    if (el === codeEl) return;
+    el.addEventListener('input', renderOptions);
+    el.addEventListener('change', renderOptions);
+  });
+  renderOptions();
 
   function ensure() {
     if (!logger) {
@@ -68,7 +113,7 @@
 
   function seed() {
     var l = ensure();
-    l.info('Application booted', { version: '2.1.0', mode: 'demo' });
+    l.info('Application booted', { version: '2.2.0', mode: 'demo' });
     l.log('Router ready', { routes: 12 });
     l.success('Service worker registered');
     l.debug('Hydration finished in 42ms');
@@ -94,17 +139,17 @@
   /* --- feature demos --- */
   var demos = {
     'tag-auth': function (l) {
-      l.tagged({ label: 'AUTH', bg: 'rgba(139,92,246,.22)', color: '#c4b5fd' }, 'info',
+      l.tagged({ label: 'AUTH', bg: 'rgba(139,92,246,.16)', color: '#8b5cf6' }, 'info',
         'Token refreshed', { expiresIn: '1h' });
     },
     'tag-multi': function (l) {
       l.tagged([
-        { label: 'DB',   bg: 'rgba(234,179,8,.2)',  color: '#fde047' },
-        { label: 'SLOW', bg: 'rgba(239,68,68,.2)',  color: '#fca5a5' }
+        { label: 'DB',   bg: 'rgba(234,179,8,.16)', color: '#ca8a04' },
+        { label: 'SLOW', bg: 'rgba(239,68,68,.14)', color: '#ef4444' }
       ], 'warn', 'Query took 3.1s', { sql: 'SELECT * FROM orders WHERE status = $1', rows: 84213 });
     },
     'tag-perf': function (l) {
-      l.tagged({ label: 'PERF', bg: 'rgba(74,222,128,.18)', color: '#86efac' }, 'debug',
+      l.tagged({ label: 'PERF', bg: 'rgba(34,197,94,.14)', color: '#16a34a' }, 'debug',
         'LCP measured', { lcp: 1240, cls: 0.02, inp: 96 });
     },
 
@@ -124,7 +169,7 @@
         err.context = { cartId: 'c_8812', items: 3 };
         l.error('Checkout crashed', err);
       }
-      toast('Expand the ▼ to see the full stack');
+      toast('Use the arrow next to the error to see its stack');
     },
     bigint: function (l) {
       l.warn('BigInt payload', { id: 90071992547409911n, ratio: 0.5 });
@@ -267,8 +312,8 @@
       var el = document.querySelector(btn.dataset.copy);
       if (!el || !navigator.clipboard) return;
       navigator.clipboard.writeText(el.textContent.trim()).then(function () {
-        var prev = btn.textContent;
-        btn.textContent = '✓ Copied';
+        var prev = btn.dataset.label || (btn.dataset.label = btn.textContent);
+        btn.textContent = 'Copied';
         setTimeout(function () { btn.textContent = prev; }, 1400);
       });
     });

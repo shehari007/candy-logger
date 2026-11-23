@@ -12,11 +12,16 @@ import { LOG_LEVELS, isLogLevel } from './core/types.js';
 import type { LogStore, StoreEvent } from './core/store.js';
 import { previewOf, safeStringify, tokenizeJson } from './core/serialize.js';
 import { CANDY_CSS } from './styles.js';
+import { icon, mark, type IconName } from './icons.js';
 
-const STYLE_ID = 'candy-logger-styles-v21';
+const STYLE_ID = 'candy-logger-styles-v22';
 const PINNED_KEY = 'candy-logger-pins-v21';
-const UI_STATE_KEY = 'candy-logger-ui-v21';
+const LAYOUT_KEY = 'candy-logger-layout-v22';
 const MAX_PIN_BYTES = 64 * 1024;
+/** Objects whose one-line JSON fits in this many characters are shown inline. */
+const INLINE_JSON_MAX = 100;
+const MOBILE_MAX_WIDTH = 640;
+const ACTION_SIZE = 24;
 
 /** Only these CSS properties may come from log data (`%c` payloads, tag colors). */
 const STYLE_ALLOWLIST = new Set([
@@ -35,12 +40,47 @@ const STYLE_ALLOWLIST = new Set([
   'opacity',
 ]);
 
+const FILTERS: { level: LogLevel | 'all'; label: string }[] = [
+  { level: 'all', label: 'All' },
+  { level: 'log', label: 'Log' },
+  { level: 'info', label: 'Info' },
+  { level: 'debug', label: 'Debug' },
+  { level: 'success', label: 'Success' },
+  { level: 'warn', label: 'Warn' },
+  { level: 'error', label: 'Error' },
+];
+
 interface StoredPin {
   level: LogLevel;
   message: string;
   timestamp: string;
   tags?: LogTag[];
 }
+
+/**
+ * What the panel remembers between page loads. The option values it was saved
+ * under are stored too, so editing `position`, `theme` or `collapsed` in code
+ * takes effect instead of being overridden by an old drag or toggle.
+ */
+interface SavedLayout {
+  position?: PanelPosition;
+  theme?: PanelTheme;
+  collapsed?: boolean;
+  minimized?: boolean;
+  themeChoice?: 'light' | 'dark';
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+
+type ResolvedOptions = Required<
+  Pick<
+    CandyLoggerOptions,
+    'position' | 'theme' | 'maxLogs' | 'showTimestamp' | 'collapsed' | 'tags' | 'dimWhenIdle' | 'persistPins' | 'persistLayout'
+  >
+> &
+  CandyLoggerOptions;
 
 let styleRefCount = 0;
 
@@ -75,28 +115,72 @@ function looksLikeError(v: unknown): v is { name: string; message: string; stack
   );
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(Math.max(v, min), Math.max(min, max));
+}
+
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null; // storage disabled (private mode, blocked cookies)
+  }
+}
+
+function writeStorage(key: string, value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* quota exceeded or storage disabled */
+  }
+}
+
+/** `[HH:MM:SS, .mmm]`; the milliseconds are a separate node so narrow screens can drop them. */
+function formatTime(d: Date): [string, string] {
+  if (isNaN(d.getTime())) return ['--:--:--', '.---'];
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return [`${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`, `.${p(d.getMilliseconds(), 3)}`];
+}
+
+/** `{ a: undefined }` must not override a default, so drop undefined keys before merging. */
+function definedOnly<T extends object>(o: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [k, v] of Object.entries(o)) if (v !== undefined) (out as any)[k] = v;
+  return out;
+}
+
 export class CandyLoggerUI {
   private store: LogStore;
-  private options: Required<
-    Pick<CandyLoggerOptions, 'position' | 'maxLogs' | 'showTimestamp' | 'collapsed' | 'tags' | 'dimWhenIdle' | 'persistPins'>
-  > &
-    CandyLoggerOptions;
+  private options: ResolvedOptions;
   private customActions: LogAction[];
 
   private container: HTMLDivElement | null = null;
+  private header: HTMLElement | null = null;
   private tableBody: HTMLTableSectionElement | null = null;
   private pinnedBody: HTMLTableSectionElement | null = null;
   private wrapEl: HTMLElement | null = null;
+  private searchEl: HTMLInputElement | null = null;
   private emptyEl: HTMLElement | null = null;
+  private emptyTitleEl: HTMLElement | null = null;
+  private emptySubEl: HTMLElement | null = null;
   private counterEl: HTMLElement | null = null;
+  private errCountEl: HTMLElement | null = null;
   private newPillEl: HTMLButtonElement | null = null;
   private countEls = new Map<string, HTMLElement>();
   private rows = new Map<string, HTMLTableRowElement>();
 
   private abort = new AbortController();
-  private mql: MediaQueryList | null = null;
+  private resizeObserver: ResizeObserver | null = null;
   private themeSetting: PanelTheme;
   private resolvedTheme: 'light' | 'dark';
+  private themeChoice: 'light' | 'dark' | undefined;
+  private saved: SavedLayout = {};
+  private geometry: { x?: number; y?: number; w?: number; h?: number } = {};
 
   private isMinimized = false;
   private isPanelPinned = false;
@@ -104,6 +188,7 @@ export class CandyLoggerUI {
   private searchTerm = '';
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private stickToBottom = true;
+  private scrollQueued = false;
   private unseen = 0;
   private dragPointerId: number | null = null;
   private dragOffset = { x: 0, y: 0 };
@@ -121,10 +206,11 @@ export class CandyLoggerUI {
       tags: true,
       dimWhenIdle: false,
       persistPins: true,
-      ...options,
+      persistLayout: true,
+      ...definedOnly(options),
     };
-    this.customActions = options.actions || [];
-    this.themeSetting = this.options.theme || 'dark';
+    this.customActions = Array.isArray(options.actions) ? options.actions : [];
+    this.themeSetting = this.options.theme;
     this.resolvedTheme = this.resolveTheme(this.themeSetting);
 
     if (typeof window !== 'undefined' && typeof document !== 'undefined') this.init();
@@ -143,27 +229,40 @@ export class CandyLoggerUI {
 
   private init(): void {
     this.injectStyles();
+    this.saved = this.loadLayout();
+
+    if (this.saved.themeChoice && this.saved.theme === this.options.theme) {
+      this.themeChoice = this.saved.themeChoice;
+      this.themeSetting = this.saved.themeChoice;
+      this.resolvedTheme = this.saved.themeChoice;
+    }
+    this.isMinimized =
+      this.saved.collapsed === this.options.collapsed && typeof this.saved.minimized === 'boolean'
+        ? this.saved.minimized
+        : this.options.collapsed;
 
     const el = document.createElement('div');
     el.className = `candy-logger candy-logger--${this.resolvedTheme}`;
     if (this.options.dimWhenIdle) el.classList.add('candy-logger--dim');
+    if (this.options.position === 'full-bottom') el.classList.add('candy-logger--docked');
+    if (this.isMinimized) el.classList.add('candy-logger--minimized');
     el.setAttribute('role', 'complementary');
-    el.setAttribute('aria-label', 'Candy Logger panel');
+    el.setAttribute('aria-label', 'Candy Logger');
+    el.style.setProperty('--candy-actions-w', `${this.actionCount * ACTION_SIZE + 12}px`);
     this.container = el;
     this.applyPosition(this.options.position);
-
-    if (this.options.collapsed) {
-      el.classList.add('candy-logger--minimized');
-      this.isMinimized = true;
-    }
+    this.restoreGeometry();
 
     this.buildSkeleton();
-    this.cacheNodes();
     this.attachEvents();
     this.watchSystemTheme();
+    this.watchResize();
 
     const append = () => {
-      if (!this.destroyed && this.container) document.body.appendChild(this.container);
+      if (!this.destroyed && this.container) {
+        document.body.appendChild(this.container);
+        this.queueScroll();
+      }
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', append, { once: true, signal: this.abort.signal });
@@ -184,9 +283,10 @@ export class CandyLoggerUI {
     this.destroyed = true;
     this.abort.abort();
     if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    this.mql = null;
     this.container?.remove();
     this.container = null;
     this.rows.clear();
@@ -200,6 +300,7 @@ export class CandyLoggerUI {
     if (document.getElementById(STYLE_ID)) return;
     const s = document.createElement('style');
     s.id = STYLE_ID;
+    if (this.options.nonce) s.nonce = this.options.nonce;
     s.textContent = CANDY_CSS;
     document.head.appendChild(s);
   }
@@ -207,8 +308,7 @@ export class CandyLoggerUI {
   private watchSystemTheme(): void {
     if (this.themeSetting !== 'auto' || typeof window.matchMedia !== 'function') return;
     try {
-      this.mql = window.matchMedia('(prefers-color-scheme: light)');
-      this.mql.addEventListener(
+      window.matchMedia('(prefers-color-scheme: light)').addEventListener(
         'change',
         () => {
           if (this.themeSetting === 'auto') this.setTheme(this.resolveTheme('auto'));
@@ -220,10 +320,103 @@ export class CandyLoggerUI {
     }
   }
 
+  /* ============================== layout memory ============================== */
+
+  private loadLayout(): SavedLayout {
+    if (!this.options.persistLayout) return {};
+    const raw = readStorage(LAYOUT_KEY);
+    if (!raw) return {};
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === 'object' && !Array.isArray(v) ? (v as SavedLayout) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private saveLayout(): void {
+    if (!this.options.persistLayout || this.destroyed) return;
+    const data: SavedLayout = {
+      position: this.options.position,
+      theme: this.options.theme,
+      collapsed: this.options.collapsed,
+      minimized: this.isMinimized,
+      ...this.geometry,
+    };
+    if (this.themeChoice) data.themeChoice = this.themeChoice;
+    writeStorage(LAYOUT_KEY, JSON.stringify(data));
+  }
+
+  private restoreGeometry(): void {
+    const s = this.saved;
+    if (s.position !== this.options.position) return;
+    const style = this.container!.style;
+    const docked = this.options.position === 'full-bottom';
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    if (!docked && isFiniteNumber(s.w) && s.w >= 340) {
+      this.geometry.w = s.w;
+      style.width = `${Math.min(s.w, vw - 16)}px`;
+    }
+    if (isFiniteNumber(s.h) && s.h >= 160) {
+      this.geometry.h = s.h;
+      style.height = `${Math.min(s.h, vh - 16)}px`;
+    }
+    if (!docked && isFiniteNumber(s.x) && isFiniteNumber(s.y)) {
+      // The viewport may be smaller than when this was saved; keep a grabbable
+      // strip of the header on screen.
+      const w = this.geometry.w ?? 720;
+      this.geometry.x = s.x;
+      this.geometry.y = s.y;
+      style.left = `${clamp(s.x, 80 - w, vw - 80)}px`;
+      style.top = `${clamp(s.y, 0, vh - 38)}px`;
+      style.right = 'auto';
+      style.bottom = 'auto';
+    }
+  }
+
+  /**
+   * The browser writes inline `width`/`height` when the user drags the native
+   * resize handle, so a size change with no inline px value (a viewport clamp,
+   * minimizing) is not mistaken for a user resize.
+   */
+  private watchResize(): void {
+    if (!this.options.persistLayout || typeof ResizeObserver === 'undefined') return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const px = (v: string) => (v.endsWith('px') ? Math.round(parseFloat(v)) : undefined);
+    this.resizeObserver = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const el = this.container;
+        if (!el || this.destroyed || this.isMinimized || window.innerWidth <= MOBILE_MAX_WIDTH) return;
+        const w = this.options.position === 'full-bottom' ? undefined : px(el.style.width);
+        const h = px(el.style.height);
+        if (w === this.geometry.w && h === this.geometry.h) return;
+        if (w !== undefined) this.geometry.w = w;
+        if (h !== undefined) this.geometry.h = h;
+        this.saveLayout();
+      }, 250);
+    });
+    this.resizeObserver.observe(this.container!);
+  }
+
   /* ============================== skeleton ============================== */
 
   private get columnCount(): number {
     return 3 + (this.options.showTimestamp ? 1 : 0) + (this.options.tags ? 1 : 0);
+  }
+
+  private get actionCount(): number {
+    return 3 + (this.options.tags ? 1 : 0) + this.customActions.length;
+  }
+
+  private iconHost(name: IconName): HTMLSpanElement {
+    const span = document.createElement('span');
+    span.className = 'candy-ico';
+    span.setAttribute('aria-hidden', 'true');
+    span.appendChild(icon(name));
+    return span;
   }
 
   private buildSkeleton(): void {
@@ -234,38 +427,54 @@ export class CandyLoggerUI {
       if (text != null) n.textContent = text;
       return n;
     };
-    const iconBtn = (action: string, glyph: string, label: string) => {
+    const iconBtn = (action: string, name: IconName, label: string) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'candy-hbtn';
       b.dataset.act = action;
       b.setAttribute('aria-label', label);
       b.title = label;
-      const g = h('span', undefined, glyph);
-      g.setAttribute('aria-hidden', 'true');
-      b.appendChild(g);
+      b.appendChild(this.iconHost(name));
       return b;
     };
 
     /* header */
     const header = h('div', 'candy-header');
+    this.header = header;
     const left = h('div', 'candy-header-left');
-    left.appendChild(h('span', 'candy-title', '🍬 Candy Logger'));
-    if (this.options.badgeText) left.appendChild(h('span', 'candy-badge', this.options.badgeText));
+    left.append(mark(), h('span', 'candy-title', 'Candy Logger'));
+    if (this.options.badgeText) left.appendChild(h('span', 'candy-badge', String(this.options.badgeText)));
     const counter = h('span', 'candy-log-counter', '0');
     counter.setAttribute('aria-label', 'Total logs');
-    left.appendChild(counter);
+    counter.title = 'Total logs';
+    const errCount = h('span', 'candy-errcount');
+    errCount.hidden = true;
+    left.append(counter, errCount);
+    this.counterEl = counter;
+    this.errCountEl = errCount;
 
     const right = h('div', 'candy-header-right');
-    right.appendChild(iconBtn('theme', this.resolvedTheme === 'dark' ? '☀️' : '🌙', 'Switch color theme'));
-    const pinBtn = iconBtn('pin', '📌', 'Keep panel fully visible');
-    pinBtn.setAttribute('aria-pressed', 'false');
-    right.appendChild(pinBtn);
-    right.appendChild(iconBtn('export', '💾', 'Export logs as JSON'));
-    right.appendChild(iconBtn('copy-all', '📋', 'Copy all logs to clipboard'));
-    right.appendChild(iconBtn('clear', '🗑️', 'Clear logs (pinned rows are kept)'));
-    const minBtn = iconBtn('minimize', '−', 'Minimize panel');
-    minBtn.setAttribute('aria-expanded', String(!this.options.collapsed));
+    right.appendChild(
+      iconBtn(
+        'theme',
+        this.resolvedTheme === 'dark' ? 'sun' : 'moon',
+        this.resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
+      ),
+    );
+    if (this.options.dimWhenIdle) {
+      const pinBtn = iconBtn('pin', 'pin', 'Keep panel fully visible');
+      pinBtn.setAttribute('aria-pressed', 'false');
+      right.appendChild(pinBtn);
+    }
+    right.appendChild(iconBtn('export', 'download', 'Export logs as JSON'));
+    right.appendChild(iconBtn('copy-all', 'copy', 'Copy all logs'));
+    right.appendChild(iconBtn('clear', 'clear', 'Clear logs (pinned rows are kept)'));
+    const minBtn = iconBtn(
+      'minimize',
+      this.isMinimized ? 'restore' : 'minus',
+      this.isMinimized ? 'Expand panel' : 'Minimize panel',
+    );
+    minBtn.setAttribute('aria-expanded', String(!this.isMinimized));
     right.appendChild(minBtn);
     header.append(left, right);
 
@@ -274,56 +483,55 @@ export class CandyLoggerUI {
     const filters = h('div', 'candy-filters');
     filters.setAttribute('role', 'group');
     filters.setAttribute('aria-label', 'Filter by level');
-    const defs: { level: LogLevel | 'all'; label: string; icon: string }[] = [
-      { level: 'all', label: 'All', icon: '📊' },
-      { level: 'log', label: 'Log', icon: '📝' },
-      { level: 'info', label: 'Info', icon: 'ℹ️' },
-      { level: 'debug', label: 'Debug', icon: '🐛' },
-      { level: 'success', label: 'OK', icon: '✅' },
-      { level: 'warn', label: 'Warn', icon: '⚠️' },
-      { level: 'error', label: 'Error', icon: '❌' },
-    ];
-    for (const d of defs) {
+    for (const d of FILTERS) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'candy-fbtn' + (d.level === 'all' ? ' candy-fbtn--active' : '');
       b.dataset.level = d.level;
       b.setAttribute('aria-pressed', String(d.level === 'all'));
-      const icon = h('span', undefined, d.icon);
-      icon.setAttribute('aria-hidden', 'true');
+      if (d.level !== 'all') {
+        const dot = h('span', 'candy-fdot');
+        dot.setAttribute('aria-hidden', 'true');
+        b.appendChild(dot);
+      }
       const count = h('span', 'candy-fcount', '0');
-      b.append(icon, document.createTextNode(' ' + d.label + ' '), count);
+      b.append(h('span', 'candy-flabel', d.label), count);
+      this.countEls.set(d.level, count);
       filters.appendChild(b);
     }
     const searchWrap = h('div', 'candy-search-wrap');
     const search = document.createElement('input');
     search.type = 'search';
     search.className = 'candy-search';
-    search.placeholder = 'Search logs…';
+    search.placeholder = 'Search';
     search.spellcheck = false;
+    search.autocomplete = 'off';
     search.setAttribute('aria-label', 'Search logs');
-    searchWrap.appendChild(search);
+    searchWrap.append(icon('search'), search);
+    this.searchEl = search;
     toolbar.append(filters, searchWrap);
 
     /* body */
     const body = h('div', 'candy-body');
     const wrap = h('div', 'candy-table-wrap');
+    this.wrapEl = wrap;
     const table = document.createElement('table');
     table.className = 'candy-table';
     const thead = document.createElement('thead');
     const hrow = document.createElement('tr');
-    const th = (cls: string, text: string) => {
+    const th = (cls: string, text: string, srOnly = false) => {
       const n = document.createElement('th');
       n.className = `candy-th ${cls}`;
       n.scope = 'col';
-      n.textContent = text;
+      if (srOnly) n.appendChild(h('span', 'candy-sr', text));
+      else n.textContent = text;
       return n;
     };
     if (this.options.showTimestamp) hrow.appendChild(th('candy-th--time', 'Time'));
     hrow.appendChild(th('candy-th--level', 'Level'));
     if (this.options.tags) hrow.appendChild(th('candy-th--tags', 'Tags'));
     hrow.appendChild(th('candy-th--message', 'Message'));
-    hrow.appendChild(th('candy-th--actions', 'Actions'));
+    hrow.appendChild(th('candy-th--actions', 'Actions', true));
     thead.appendChild(hrow);
     const pinnedBody = document.createElement('tbody');
     pinnedBody.className = 'candy-pinned-body';
@@ -333,34 +541,24 @@ export class CandyLoggerUI {
     tableBody.setAttribute('aria-relevant', 'additions');
     table.append(thead, pinnedBody, tableBody);
     wrap.appendChild(table);
+    this.pinnedBody = pinnedBody;
+    this.tableBody = tableBody;
 
     const empty = h('div', 'candy-empty');
-    const icon = h('div', 'candy-empty-icon', '🍬');
-    icon.setAttribute('aria-hidden', 'true');
-    empty.append(icon, h('div', 'candy-empty-title', 'No logs yet'), h('div', 'candy-empty-sub', 'Start logging to see entries here'));
+    this.emptyTitleEl = h('div', 'candy-empty-title', 'No logs yet');
+    this.emptySubEl = h('div', 'candy-empty-sub', 'Anything you log will show up here.');
+    empty.append(this.emptyTitleEl, this.emptySubEl);
+    this.emptyEl = empty;
 
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'candy-newpill candy-newpill--hidden';
     pill.dataset.act = 'scroll-bottom';
-    pill.textContent = '↓ new logs';
+    pill.textContent = '↓ New logs';
     this.newPillEl = pill;
 
     body.append(wrap, empty, pill);
     el.append(header, toolbar, body);
-  }
-
-  private cacheNodes(): void {
-    const el = this.container!;
-    this.tableBody = el.querySelector('.candy-table-body');
-    this.pinnedBody = el.querySelector('.candy-pinned-body');
-    this.wrapEl = el.querySelector('.candy-table-wrap');
-    this.emptyEl = el.querySelector('.candy-empty');
-    this.counterEl = el.querySelector('.candy-log-counter');
-    for (const b of el.querySelectorAll<HTMLElement>('.candy-fbtn')) {
-      const c = b.querySelector<HTMLElement>('.candy-fcount');
-      if (c && b.dataset.level) this.countEls.set(b.dataset.level, c);
-    }
   }
 
   private applyPosition(pos: PanelPosition): void {
@@ -386,7 +584,7 @@ export class CandyLoggerUI {
         s.right = '0';
         s.width = '100%';
         s.maxWidth = '100%';
-        s.borderRadius = '12px 12px 0 0';
+        s.borderRadius = '10px 10px 0 0';
         break;
       default:
         s.bottom = '16px';
@@ -400,12 +598,12 @@ export class CandyLoggerUI {
     const el = this.container!;
     const signal = this.abort.signal;
 
-    // ONE delegated listener. No inline handlers, so the panel works under
-    // `script-src 'self'`, and no `window.__candy*` globals are needed.
+    // ONE delegated listener and no inline handlers, so the panel works under
+    // `script-src 'self'` and needs no window globals.
     el.addEventListener(
       'click',
       (ev) => {
-        const target = ev.target as HTMLElement | null;
+        const target = ev.target as Element | null;
         const btn = target?.closest<HTMLElement>('[data-act]');
         if (btn && el.contains(btn)) {
           ev.stopPropagation();
@@ -421,7 +619,7 @@ export class CandyLoggerUI {
       { signal },
     );
 
-    const search = el.querySelector<HTMLInputElement>('.candy-search')!;
+    const search = this.searchEl!;
     search.addEventListener(
       'input',
       () => {
@@ -430,6 +628,18 @@ export class CandyLoggerUI {
           this.searchTerm = search.value.trim().toLowerCase();
           this.applyFilters();
         }, 120);
+      },
+      { signal },
+    );
+    search.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.key === 'Escape' && search.value) {
+          e.preventDefault();
+          search.value = '';
+          this.searchTerm = '';
+          this.applyFilters();
+        }
       },
       { signal },
     );
@@ -444,18 +654,32 @@ export class CandyLoggerUI {
       { signal, passive: true },
     );
 
+    const header = this.header!;
+    header.addEventListener(
+      'dblclick',
+      (e) => {
+        if (!(e.target as Element).closest('button')) this.toggleMinimize();
+      },
+      { signal },
+    );
+
     // Pointer events cover mouse, touch and pen in one path, and pointer capture
-    // means the drag survives leaving the header.
-    const header = el.querySelector<HTMLElement>('.candy-header')!;
+    // keeps the drag alive when the cursor leaves the header.
     header.addEventListener(
       'pointerdown',
       (e) => {
-        if ((e.target as HTMLElement).closest('.candy-hbtn')) return;
+        if (e.button !== 0 || (e.target as Element).closest('button')) return;
+        if (this.options.position === 'full-bottom' || window.innerWidth <= MOBILE_MAX_WIDTH) return;
         e.preventDefault(); // stop the host page's text selection
         this.dragPointerId = e.pointerId;
-        header.setPointerCapture(e.pointerId);
+        try {
+          header.setPointerCapture(e.pointerId);
+        } catch {
+          /* synthetic event */
+        }
         const r = el.getBoundingClientRect();
         this.dragOffset = { x: e.clientX - r.left, y: e.clientY - r.top };
+        el.classList.add('candy-logger--dragging');
       },
       { signal },
     );
@@ -465,20 +689,29 @@ export class CandyLoggerUI {
         if (this.dragPointerId !== e.pointerId || !this.container) return;
         const r = this.container.getBoundingClientRect();
         // Always leave a grabbable strip of the header on screen.
-        const left = Math.min(Math.max(e.clientX - this.dragOffset.x, 80 - r.width), window.innerWidth - 80);
-        const top = Math.min(Math.max(e.clientY - this.dragOffset.y, 0), window.innerHeight - 36);
+        const left = clamp(e.clientX - this.dragOffset.x, 80 - r.width, window.innerWidth - 80);
+        const top = clamp(e.clientY - this.dragOffset.y, 0, window.innerHeight - 38);
         Object.assign(this.container.style, { left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto' });
       },
       { signal },
     );
     const endDrag = (e: PointerEvent) => {
-      if (this.dragPointerId === e.pointerId) {
-        try {
-          header.releasePointerCapture(e.pointerId);
-        } catch {
-          /* already released */
-        }
-        this.dragPointerId = null;
+      if (this.dragPointerId !== e.pointerId) return;
+      try {
+        header.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      this.dragPointerId = null;
+      const c = this.container;
+      if (!c) return;
+      c.classList.remove('candy-logger--dragging');
+      const x = parseFloat(c.style.left);
+      const y = parseFloat(c.style.top);
+      if (isFiniteNumber(x) && isFiniteNumber(y)) {
+        this.geometry.x = Math.round(x);
+        this.geometry.y = Math.round(y);
+        this.saveLayout();
       }
     };
     header.addEventListener('pointerup', endDrag, { signal });
@@ -511,7 +744,7 @@ export class CandyLoggerUI {
         break;
       case 'row-pin':
         if (this.store.isPinned(id)) this.store.unpin(id);
-        else if (!this.store.pin(id)) this.flash(btn, '✕');
+        else if (!this.store.pin(id)) this.flash(btn, false);
         break;
       case 'row-del':
         this.store.remove(id);
@@ -528,8 +761,8 @@ export class CandyLoggerUI {
       case 'custom': {
         const action = this.customActions[Number(btn.dataset.index)];
         const entry = this.store.get(id);
-        // Index-based dispatch: a label can never be parsed as code, and
-        // duplicate labels no longer collide.
+        // Dispatch by index: a label is never parsed as code, and duplicate
+        // labels cannot collide.
         if (action && entry) {
           try {
             action.onClick(entry);
@@ -547,12 +780,13 @@ export class CandyLoggerUI {
   private onStoreEvent(e: StoreEvent): void {
     if (this.destroyed) return;
     switch (e.type) {
-      case 'add':
+      case 'add': {
         this.insertRow(e.entry, this.store.isPinned(e.entry.id));
         this.refreshCounts();
-        if (this.stickToBottom) this.scrollToBottom();
-        else this.bumpUnseen();
+        if (this.stickToBottom) this.queueScroll();
+        else if (this.matches(e.entry)) this.bumpUnseen();
         break;
+      }
       case 'evict':
       case 'remove':
         this.dropRow(e.id);
@@ -579,13 +813,18 @@ export class CandyLoggerUI {
     this.rows.clear();
     for (const entry of this.store.all()) this.insertRow(entry, this.store.isPinned(entry.id));
     this.refreshCounts();
+    this.clearUnseen();
     this.savePinnedToStorage();
+  }
+
+  private detailRows(id: string): NodeListOf<HTMLElement> | [] {
+    return this.container?.querySelectorAll<HTMLElement>(`tr.candy-detail-row[data-detail-for="${cssEsc(id)}"]`) ?? [];
   }
 
   private dropRow(id: string): void {
     this.rows.get(id)?.remove();
     this.rows.delete(id);
-    this.container?.querySelector(`tr.candy-detail-row[data-detail-for="${cssEsc(id)}"]`)?.remove();
+    for (const d of this.detailRows(id)) d.remove();
   }
 
   private rebuildRow(entry: LogEntry): void {
@@ -594,6 +833,12 @@ export class CandyLoggerUI {
     const next = this.createRow(entry, this.store.isPinned(entry.id));
     old.replaceWith(next);
     this.rows.set(entry.id, next);
+    // Keep the chevrons in step with any detail rows that are still open.
+    for (const d of this.detailRows(entry.id)) {
+      const toggle = next.querySelector<HTMLElement>(`.candy-json-toggle[data-uid="${cssEsc(d.dataset.detailUid || '')}"]`);
+      toggle?.classList.remove('collapsed');
+      toggle?.setAttribute('aria-expanded', 'true');
+    }
   }
 
   private relocateRow(id: string): void {
@@ -608,15 +853,16 @@ export class CandyLoggerUI {
     const row = this.createRow(entry, pinned);
     (pinned ? this.pinnedBody : this.tableBody).appendChild(row);
     this.rows.set(entry.id, row);
-    this.updateEmptyState();
   }
 
   /* ============================== rows ============================== */
 
   private createRow(entry: LogEntry, pinned: boolean): HTMLTableRowElement {
+    // Whitelisted, so a level from JS callers or storage never reaches an attribute raw.
+    const level: LogLevel = isLogLevel(entry.level) ? entry.level : 'log';
     const row = document.createElement('tr');
     row.className = 'candy-tr' + (pinned ? ' candy-tr--pinned' : '');
-    row.dataset.level = entry.level;
+    row.dataset.level = level;
     row.dataset.id = entry.id;
 
     const td = (cls: string) => {
@@ -627,22 +873,19 @@ export class CandyLoggerUI {
 
     if (this.options.showTimestamp) {
       const t = td('candy-td--time');
-      t.textContent = entry.timestamp.toLocaleTimeString('en-US', {
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-      t.title = entry.timestamp.toISOString();
+      const [hms, ms] = formatTime(entry.timestamp);
+      const msEl = document.createElement('span');
+      msEl.className = 'candy-ms';
+      msEl.textContent = ms;
+      t.append(document.createTextNode(hms), msEl);
+      if (!isNaN(entry.timestamp.getTime())) t.title = entry.timestamp.toISOString();
       row.appendChild(t);
     }
 
     const lvl = td('candy-td--level');
     const badge = document.createElement('span');
-    // Whitelisted, so a level from JS callers or storage can never reach the class attribute raw.
-    const safeLevel: LogLevel = isLogLevel(entry.level) ? entry.level : 'log';
-    badge.className = `candy-level candy-level--${safeLevel}`;
-    badge.textContent = safeLevel.toUpperCase();
+    badge.className = `candy-level candy-level--${level}`;
+    badge.textContent = level;
     lvl.appendChild(badge);
     row.appendChild(lvl);
 
@@ -666,19 +909,14 @@ export class CandyLoggerUI {
 
   private renderTags(cell: HTMLElement, tags?: LogTag[]): void {
     cell.replaceChildren();
-    if (!tags || tags.length === 0) {
-      const dash = document.createElement('span');
-      dash.className = 'candy-dash';
-      dash.textContent = '—';
-      cell.appendChild(dash);
-      return;
-    }
+    if (!Array.isArray(tags)) return;
     for (const t of tags) {
       const el = document.createElement('span');
       el.className = 'candy-tag';
-      el.textContent = String(t?.label ?? ''); // textContent: markup in a label is text, never nodes
-      // Colors go through CSSOM with a property allowlist — they can never
-      // terminate the attribute and inject an event handler.
+      el.textContent = String(t?.label ?? ''); // markup in a label is text, never nodes
+      el.title = el.textContent;
+      // Colors go through CSSOM with a property allowlist, so they can never
+      // terminate an attribute and inject a handler.
       applySafeStyle(el, { ...(t?.bg ? { 'background-color': t.bg } : {}), ...(t?.color ? { color: t.color } : {}) });
       cell.appendChild(el);
     }
@@ -686,8 +924,8 @@ export class CandyLoggerUI {
 
   private renderMessage(cell: HTMLElement, entry: LogEntry): void {
     cell.replaceChildren();
-    // When format specifiers were used, `parts` already holds the substituted (and
-    // `%c`-styled) text — rendering args separately would show the raw template.
+    // With format specifiers, `parts` already holds the substituted (and
+    // `%c`-styled) text; rendering args separately would show the raw template.
     if (entry.formatted && entry.parts?.length) {
       for (const part of entry.parts) cell.appendChild(this.renderPart(part));
       return;
@@ -706,31 +944,42 @@ export class CandyLoggerUI {
     return span;
   }
 
+  private toggleButton(uid: string, label: string): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'candy-json-toggle collapsed';
+    b.dataset.act = 'row-toggle';
+    b.dataset.uid = uid;
+    b.setAttribute('aria-expanded', 'false');
+    b.setAttribute('aria-label', label);
+    b.appendChild(icon('chevron'));
+    return b;
+  }
+
   private renderValue(value: unknown, uid: string): Node {
     if (value === null || typeof value !== 'object') {
       return document.createTextNode(String(value));
     }
     if (looksLikeError(value)) return this.renderError(value, uid);
 
-    const { text } = safeStringify(value, { space: 2 });
-    const isLong = text.split('\n').length > 3;
-    if (!isLong) {
-      const pre = document.createElement('pre');
-      pre.className = 'candy-json-pre candy-json-pre--inline';
-      this.paintJson(pre, text);
-      return pre;
+    // Map/Set snapshots carry a `__type` label; show it as a prefix, not a key.
+    const typed = typeof (value as any).__type === 'string' ? (value as any) : null;
+    const body = typed ? (typed.entries ?? typed.values ?? []) : value;
+    const { text } = safeStringify(body);
+    if (text.length <= INLINE_JSON_MAX) {
+      const span = document.createElement('span');
+      span.className = 'candy-json-inline';
+      if (typed) {
+        const t = document.createElement('span');
+        t.className = 'candy-json-type';
+        t.textContent = `${typed.__type} `;
+        span.appendChild(t);
+      }
+      this.paintJson(span, text, true);
+      return span;
     }
 
     const frag = document.createDocumentFragment();
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'candy-json-toggle collapsed';
-    toggle.dataset.act = 'row-toggle';
-    toggle.dataset.uid = uid;
-    toggle.setAttribute('aria-expanded', 'false');
-    toggle.setAttribute('aria-label', `Expand ${previewOf(value)}`);
-    toggle.textContent = '▼';
-
     const preview = document.createElement('button');
     preview.type = 'button';
     preview.className = 'candy-json-preview';
@@ -740,47 +989,38 @@ export class CandyLoggerUI {
     // Object KEYS reach the DOM here. textContent means a key named
     // `<img src=x onerror=...>` renders as characters, not as an element.
     preview.textContent = previewOf(value);
-
-    frag.append(toggle, preview);
+    frag.append(this.toggleButton(uid, `Expand ${previewOf(value)}`), preview);
     return frag;
   }
 
   private renderError(err: { name: string; message: string; stack?: string[] }, uid: string): Node {
     const frag = document.createDocumentFragment();
+    const extras = Object.keys(err).filter((k) => !['name', 'message', 'stack'].includes(k));
+    if (err.stack?.length || extras.length) frag.appendChild(this.toggleButton(uid, 'Expand stack trace'));
     const head = document.createElement('span');
     head.className = 'candy-err';
     head.textContent = `${err.name}: ${err.message}`;
     frag.appendChild(head);
-    const extras = Object.keys(err).filter((k) => !['name', 'message', 'stack'].includes(k));
-    if (err.stack?.length || extras.length) {
-      const toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'candy-json-toggle collapsed';
-      toggle.dataset.act = 'row-toggle';
-      toggle.dataset.uid = uid;
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.setAttribute('aria-label', 'Expand stack trace');
-      toggle.textContent = '▼';
-      frag.appendChild(toggle);
-    }
     return frag;
   }
 
-  private paintJson(host: HTMLElement, json: string): void {
+  /** Highlight JSON. `compact` adds the spaces JSON.stringify leaves out of one-line output. */
+  private paintJson(host: HTMLElement, json: string, compact = false): void {
     for (const tok of tokenizeJson(json)) {
       if (tok.type === 'plain') {
-        host.appendChild(document.createTextNode(tok.text));
+        host.appendChild(document.createTextNode(compact ? tok.text.replace(/,/g, ', ') : tok.text));
       } else {
         const s = document.createElement('span');
         s.className = `candy-json-${tok.type}`;
         s.textContent = tok.text;
         host.appendChild(s);
+        if (compact && tok.type === 'key') host.appendChild(document.createTextNode(' '));
       }
     }
   }
 
   private renderActions(cell: HTMLElement, entry: LogEntry, pinned: boolean): void {
-    const mk = (act: string, cls: string, glyph: string, label: string, pressed?: boolean) => {
+    const mk = (act: string, cls: string, label: string, pressed?: boolean) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = `candy-abtn ${cls}` + (pressed ? ' active' : '');
@@ -789,21 +1029,31 @@ export class CandyLoggerUI {
       b.setAttribute('aria-label', label);
       b.title = label;
       if (pressed !== undefined) b.setAttribute('aria-pressed', String(pressed));
-      const g = document.createElement('span');
-      g.textContent = glyph;
-      g.setAttribute('aria-hidden', 'true');
-      b.appendChild(g);
       return b;
     };
-    cell.append(
-      mk('row-copy', 'candy-abtn--copy', '📋', 'Copy log text'),
-      mk('row-pin', 'candy-abtn--pin', '📌', pinned ? 'Unpin this log' : 'Pin this log to the top', pinned),
-      mk('row-tag', 'candy-abtn--tag', '🏷️', 'Add a tag to this log'),
-      mk('row-del', 'candy-abtn--del', '🗑️', 'Delete this log'),
-    );
+    const withIcon = (b: HTMLButtonElement, name: IconName) => {
+      b.appendChild(this.iconHost(name));
+      return b;
+    };
+
+    cell.appendChild(withIcon(mk('row-copy', 'candy-abtn--copy', 'Copy message'), 'copy'));
+    if (this.options.tags) cell.appendChild(withIcon(mk('row-tag', 'candy-abtn--tag', 'Add a tag'), 'tag'));
+    cell.appendChild(withIcon(mk('row-pin', 'candy-abtn--pin', pinned ? 'Unpin' : 'Pin to top', pinned), 'pin'));
+    cell.appendChild(withIcon(mk('row-del', 'candy-abtn--del', 'Delete'), 'trash'));
+
     this.customActions.forEach((a, i) => {
-      const b = mk('custom', 'candy-abtn--custom', a.icon || '⚡', a.label);
+      const b = mk('custom', 'candy-abtn--custom', String(a?.label ?? 'Action'));
       b.dataset.index = String(i);
+      if (a?.icon) {
+        // A caller-supplied icon is text (often an emoji), rendered as text.
+        const span = document.createElement('span');
+        span.className = 'candy-ico candy-abtn-text';
+        span.setAttribute('aria-hidden', 'true');
+        span.textContent = String(a.icon);
+        b.appendChild(span);
+      } else {
+        b.appendChild(this.iconHost('bolt'));
+      }
       cell.appendChild(b);
     });
   }
@@ -834,6 +1084,8 @@ export class CandyLoggerUI {
     detail.className = 'candy-detail-row' + (this.store.isPinned(id) ? ' candy-tr--pinned' : '');
     detail.dataset.detailFor = id;
     detail.dataset.detailUid = uid;
+    detail.dataset.level = row.dataset.level || 'log';
+    if (row.classList.contains('candy-tr--hidden')) detail.classList.add('candy-tr--hidden');
     const cell = document.createElement('td');
     cell.className = 'candy-td candy-td--detail';
     cell.colSpan = this.columnCount;
@@ -841,23 +1093,48 @@ export class CandyLoggerUI {
     if (entry.truncated) {
       const warn = document.createElement('span');
       warn.className = 'candy-truncated';
-      warn.textContent = '⚠ truncated for display';
+      warn.textContent = 'Some values were truncated for display.';
       cell.appendChild(warn);
     }
 
-    const pre = document.createElement('pre');
-    pre.className = 'candy-json-pre';
-    const { text } = safeStringify(value, { space: 2 });
-    this.paintJson(pre, text);
-    cell.appendChild(pre);
+    let copyText: string;
+    if (looksLikeError(value)) {
+      const lines = [`${value.name}: ${value.message}`, ...(value.stack ?? []).map((l) => `    ${l}`)];
+      copyText = lines.join('\n');
+      const pre = document.createElement('pre');
+      pre.className = 'candy-json-pre candy-stack';
+      const head = document.createElement('span');
+      head.className = 'candy-err';
+      head.textContent = lines[0];
+      pre.append(head, document.createTextNode(lines.length > 1 ? '\n' + lines.slice(1).join('\n') : ''));
+      cell.appendChild(pre);
+
+      const extras: Record<string, unknown> = {};
+      for (const k of Object.keys(value)) if (!['name', 'message', 'stack'].includes(k)) extras[k] = (value as any)[k];
+      if (Object.keys(extras).length) {
+        const { text } = safeStringify(extras, { space: 2 });
+        const more = document.createElement('pre');
+        more.className = 'candy-json-pre';
+        this.paintJson(more, text);
+        cell.appendChild(more);
+        copyText += `\n${text}`;
+      }
+    } else {
+      const { text } = safeStringify(value, { space: 2 });
+      copyText = text;
+      const pre = document.createElement('pre');
+      pre.className = 'candy-json-pre';
+      this.paintJson(pre, text);
+      cell.appendChild(pre);
+    }
 
     const bar = document.createElement('div');
     bar.className = 'candy-copy-row';
     const copy = document.createElement('button');
     copy.type = 'button';
     copy.className = 'candy-copy-btn';
-    copy.textContent = '📋 Copy JSON';
-    copy.addEventListener('click', () => this.copyText(text, copy), { signal: this.abort.signal });
+    copy.append(this.iconHost('copy'), document.createTextNode(looksLikeError(value) ? 'Copy' : 'Copy JSON'));
+    copy.addEventListener('click', () => this.copyText(copyText, copy), { signal: this.abort.signal });
     bar.appendChild(copy);
     cell.appendChild(bar);
 
@@ -870,48 +1147,53 @@ export class CandyLoggerUI {
   /* ============================== tagging ============================== */
 
   private showTagInput(id: string, btn: HTMLElement): void {
-    const host = btn.parentElement;
-    if (!host) return;
-    const open = host.querySelector('.candy-tag-input');
+    const cell = this.rows.get(id)?.querySelector<HTMLElement>('.candy-td--tags');
+    if (!cell) return;
+    const open = cell.querySelector('.candy-tag-input');
     if (open) {
       open.remove();
       return;
     }
-    const wrap = document.createElement('span');
-    wrap.className = 'candy-tag-input';
     const input = document.createElement('input');
     input.type = 'text';
+    input.className = 'candy-tag-input';
     input.maxLength = 24;
-    input.placeholder = 'Tag name…';
+    input.placeholder = 'Tag';
     input.setAttribute('aria-label', 'New tag name');
-    wrap.appendChild(input);
-    btn.after(wrap);
+    cell.appendChild(input);
     input.focus();
 
+    let done = false;
+    const close = (refocus: boolean) => {
+      done = true;
+      input.remove();
+      if (refocus && btn.isConnected) btn.focus();
+    };
     const commit = () => {
       const label = input.value.trim();
-      wrap.remove();
+      close(false);
       if (!label) return;
       const entry = this.store.get(id);
       if (!entry) return;
-      entry.tags = [...(entry.tags || []), { label: label.toUpperCase(), color: '#bb9af7', bg: 'rgba(187,154,247,.18)' }];
+      entry.tags = [...(entry.tags || []), { label: label.toUpperCase() }];
       entry.search = `${entry.search} ${label.toLowerCase()}`;
       this.store.touch(entry);
       if (this.store.isPinned(id)) this.savePinnedToStorage();
     };
     input.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // keep host-page shortcuts out of the way while typing
       if (e.key === 'Enter') commit();
-      else if (e.key === 'Escape') wrap.remove();
+      else if (e.key === 'Escape') close(true);
     });
-    input.addEventListener('blur', () => setTimeout(() => wrap.isConnected && wrap.remove(), 150));
+    input.addEventListener('blur', () => setTimeout(() => !done && input.isConnected && close(false), 150));
   }
 
   /* ============================== filtering ============================== */
 
   private matches(entry: LogEntry): boolean {
     if (this.currentFilter !== 'all' && entry.level !== this.currentFilter) return false;
-    // Search the model, not `textContent` — the DOM does not contain the text of
-    // a collapsed object, so DOM search returned false negatives on big payloads.
+    // Search the model, not the DOM: a collapsed object's contents are not in
+    // the DOM, so DOM search would miss them.
     return !this.searchTerm || entry.search.includes(this.searchTerm);
   }
 
@@ -931,10 +1213,7 @@ export class CandyLoggerUI {
       if (!row) continue;
       const hide = !this.matches(entry);
       row.classList.toggle('candy-tr--hidden', hide);
-      const detail = this.container?.querySelector<HTMLElement>(
-        `tr.candy-detail-row[data-detail-for="${cssEsc(entry.id)}"]`,
-      );
-      detail?.classList.toggle('candy-tr--hidden', hide);
+      for (const d of this.detailRows(entry.id)) d.classList.toggle('candy-tr--hidden', hide);
     }
     this.updateEmptyState();
   }
@@ -946,14 +1225,52 @@ export class CandyLoggerUI {
       if (el) el.textContent = String(counts[key as LogLevel | 'all'] ?? 0);
     }
     if (this.counterEl) this.counterEl.textContent = String(counts.all);
+    if (this.errCountEl) {
+      const n = counts.error ?? 0;
+      this.errCountEl.hidden = n === 0;
+      this.errCountEl.textContent = String(n);
+      const label = `${n} ${n === 1 ? 'error' : 'errors'}`;
+      this.errCountEl.setAttribute('aria-label', label);
+      this.errCountEl.title = label;
+    }
     this.updateEmptyState();
   }
 
   private updateEmptyState(): void {
-    this.emptyEl?.classList.toggle('hidden', this.store.size > 0);
+    if (!this.emptyEl) return;
+    let title = 'No logs yet';
+    let sub = 'Anything you log will show up here.';
+    let show = this.store.size === 0;
+    if (!show && (this.currentFilter !== 'all' || this.searchTerm)) {
+      show = !this.container?.querySelector('.candy-tr:not(.candy-tr--hidden)');
+      if (show) {
+        title = 'No matching logs';
+        const term = this.searchEl?.value.trim() ?? '';
+        sub = term
+          ? `Nothing matches “${term.length > 40 ? term.slice(0, 40) + '…' : term}”.`
+          : `There are no ${this.currentFilter} entries.`;
+      }
+    }
+    this.emptyEl.classList.toggle('hidden', !show);
+    if (show) {
+      if (this.emptyTitleEl) this.emptyTitleEl.textContent = title;
+      if (this.emptySubEl) this.emptySubEl.textContent = sub;
+    }
   }
 
   /* ============================== scroll ============================== */
+
+  /** Coalesce scroll-to-bottom to once per frame, so a burst of logs costs one layout. */
+  private queueScroll(): void {
+    if (this.scrollQueued) return;
+    this.scrollQueued = true;
+    const run = () => {
+      this.scrollQueued = false;
+      if (!this.destroyed && this.stickToBottom) this.scrollToBottom();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
 
   private scrollToBottom(): void {
     const w = this.wrapEl;
@@ -978,16 +1295,25 @@ export class CandyLoggerUI {
 
   /* ============================== header actions ============================== */
 
+  private setIcon(btn: Element | null | undefined, name: IconName): void {
+    const host = btn?.querySelector('.candy-ico');
+    host?.replaceChildren(icon(name));
+  }
+
   private toggleMinimize(): void {
+    if (!this.container) return;
     this.isMinimized = !this.isMinimized;
-    this.container!.classList.toggle('candy-logger--minimized', this.isMinimized);
-    const btn = this.container!.querySelector<HTMLElement>('[data-act="minimize"]');
+    this.container.classList.toggle('candy-logger--minimized', this.isMinimized);
+    const btn = this.container.querySelector<HTMLElement>('[data-act="minimize"]');
     if (btn) {
-      const glyph = btn.firstElementChild;
-      if (glyph) glyph.textContent = this.isMinimized ? '+' : '−';
+      this.setIcon(btn, this.isMinimized ? 'restore' : 'minus');
+      const label = this.isMinimized ? 'Expand panel' : 'Minimize panel';
       btn.setAttribute('aria-expanded', String(!this.isMinimized));
-      btn.setAttribute('aria-label', this.isMinimized ? 'Expand panel' : 'Minimize panel');
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
     }
+    if (!this.isMinimized && this.stickToBottom) this.queueScroll();
+    this.saveLayout();
   }
 
   private togglePanelPin(btn: HTMLElement): void {
@@ -999,16 +1325,24 @@ export class CandyLoggerUI {
 
   private setTheme(theme: 'light' | 'dark'): void {
     this.resolvedTheme = theme;
-    const el = this.container!;
+    const el = this.container;
+    if (!el) return;
     el.classList.toggle('candy-logger--dark', theme === 'dark');
     el.classList.toggle('candy-logger--light', theme === 'light');
-    const btn = el.querySelector<HTMLElement>('[data-act="theme"] span');
-    if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    const btn = el.querySelector<HTMLElement>('[data-act="theme"]');
+    if (btn) {
+      this.setIcon(btn, theme === 'dark' ? 'sun' : 'moon');
+      const label = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+    }
   }
 
   private cycleTheme(): void {
-    this.themeSetting = this.resolvedTheme === 'dark' ? 'light' : 'dark';
-    this.setTheme(this.themeSetting);
+    this.themeChoice = this.resolvedTheme === 'dark' ? 'light' : 'dark';
+    this.themeSetting = this.themeChoice;
+    this.setTheme(this.themeChoice);
+    this.saveLayout();
   }
 
   private exportLogs(): void {
@@ -1024,56 +1358,96 @@ export class CandyLoggerUI {
     const a = document.createElement('a');
     a.href = url;
     a.download = `candy-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    a.style.display = 'none';
+    // Firefox only follows a download link that is in the document.
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   private copyAll(btn: HTMLElement): void {
     const text = this.store
       .all()
-      .map((l) => `[${l.timestamp.toISOString()}] ${l.level.toUpperCase()} ${l.message}`)
+      .map((l) => {
+        const time = isNaN(l.timestamp.getTime()) ? '-' : l.timestamp.toISOString();
+        return `${time} ${l.level.toUpperCase().padEnd(7)} ${l.message}`;
+      })
       .join('\n');
     this.copyText(text, btn);
   }
 
   private copyText(text: string, btn: HTMLElement): void {
-    const done = () => this.flash(btn, '✓');
-    try {
-      navigator.clipboard?.writeText(text).then(done, () => this.flash(btn, '✕'));
-    } catch {
-      this.flash(btn, '✕');
-    }
+    this.writeClipboard(text).then(
+      () => this.flash(btn, true),
+      () => this.flash(btn, false),
+    );
   }
 
-  private flash(btn: HTMLElement, glyph: string): void {
-    const host = btn.firstElementChild ?? btn;
-    const prev = host.textContent;
-    host.textContent = glyph;
+  /**
+   * `navigator.clipboard` only exists in secure contexts, which rules it out when
+   * you open a dev server on your phone over the LAN (http://192.168.x.x). Fall
+   * back to a hidden textarea and execCommand there.
+   */
+  private writeClipboard(text: string): Promise<void> {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        return navigator.clipboard.writeText(text).catch(() => this.legacyCopy(text));
+      }
+    } catch {
+      /* fall through */
+    }
+    return this.legacyCopy(text);
+  }
+
+  private legacyCopy(text: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const active = document.activeElement as HTMLElement | null;
+      const ta = document.createElement('textarea');
+      try {
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        Object.assign(ta.style, { position: 'fixed', top: '0', left: '0', opacity: '0', pointerEvents: 'none' });
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+        if (ok) resolve();
+        else reject(new Error('copy failed'));
+      } catch (err) {
+        reject(err);
+      } finally {
+        ta.remove();
+        active?.focus?.();
+      }
+    });
+  }
+
+  private flash(btn: HTMLElement, ok: boolean): void {
+    if (btn.dataset.flashing) return;
+    const host = btn.querySelector<HTMLElement>('.candy-ico');
+    const prev = host ? Array.from(host.childNodes) : [];
+    btn.dataset.flashing = '1';
+    host?.replaceChildren(icon(ok ? 'check' : 'x'));
+    const cls = ok ? 'candy-flash-ok' : 'candy-flash-fail';
+    btn.classList.add(cls);
     setTimeout(() => {
-      if (host.isConnected) host.textContent = prev;
-    }, 900);
+      delete btn.dataset.flashing;
+      btn.classList.remove(cls);
+      if (host?.isConnected) host.replaceChildren(...prev);
+    }, 1000);
   }
 
   /* ============================== pin persistence ============================== */
 
   private loadPinnedFromStorage(): void {
     if (!this.options.persistPins) return;
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(PINNED_KEY);
-    } catch {
-      return; // storage disabled (private mode, blocked cookies)
-    }
+    const raw = readStorage(PINNED_KEY);
     if (!raw) return;
     let list: unknown;
     try {
       list = JSON.parse(raw);
     } catch {
-      try {
-        localStorage.removeItem(PINNED_KEY);
-      } catch {
-        /* ignore */
-      }
+      writeStorage(PINNED_KEY, null);
       return;
     }
     if (!Array.isArray(list)) return;
@@ -1083,6 +1457,7 @@ export class CandyLoggerUI {
         if (!d || !isLogLevel(d.level) || typeof d.message !== 'string') continue;
         const ts = new Date(d.timestamp);
         if (isNaN(ts.getTime())) continue;
+        const tags = Array.isArray(d.tags) ? d.tags.filter((t) => t && typeof t.label === 'string') : undefined;
         const entry: LogEntry = {
           id: this.store.nextId(),
           level: d.level,
@@ -1090,8 +1465,8 @@ export class CandyLoggerUI {
           timestamp: ts,
           args: [],
           snapshot: [d.message],
-          tags: Array.isArray(d.tags) ? d.tags.filter((t) => t && typeof t.label === 'string') : undefined,
-          search: `${d.message} ${(d.tags || []).map((t) => t?.label ?? '').join(' ')}`.toLowerCase(),
+          tags,
+          search: `${d.message} ${(tags || []).map((t) => t.label).join(' ')}`.toLowerCase(),
         };
         this.store.adopt(entry, true);
       } catch {
@@ -1103,20 +1478,18 @@ export class CandyLoggerUI {
   private savePinnedToStorage(): void {
     if (!this.options.persistPins) return;
     try {
-      const pinned = this.store.pinnedEntries();
-      // Arguments are deliberately NOT persisted — logged payloads routinely hold
+      // Arguments are deliberately NOT persisted: logged payloads routinely hold
       // tokens and PII, and localStorage outlives the session.
-      const data: StoredPin[] = pinned.map((l) => ({
+      const data: StoredPin[] = this.store.pinnedEntries().map((l) => ({
         level: l.level,
         message: l.message,
         timestamp: isNaN(l.timestamp.getTime()) ? new Date(0).toISOString() : l.timestamp.toISOString(),
         tags: l.tags,
       }));
       while (data.length && JSON.stringify(data).length > MAX_PIN_BYTES) data.shift();
-      if (data.length === 0) localStorage.removeItem(PINNED_KEY);
-      else localStorage.setItem(PINNED_KEY, JSON.stringify(data));
+      writeStorage(PINNED_KEY, data.length ? JSON.stringify(data) : null);
     } catch {
-      /* quota exceeded or storage disabled — pins stay in memory */
+      /* pins stay in memory */
     }
   }
 
@@ -1132,5 +1505,3 @@ export class CandyLoggerUI {
     return this.container;
   }
 }
-
-export { UI_STATE_KEY };

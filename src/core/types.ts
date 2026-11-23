@@ -88,10 +88,18 @@ export interface CandyLoggerOptions {
   defaultTags?: LogTag[];
   /** Badge text in the header */
   badgeText?: string;
-  /** Fade the panel to 12% until hovered (default: false) */
+  /** Fade the panel until it is hovered or focused (default: false) */
   dimWhenIdle?: boolean;
   /** Persist pinned rows to localStorage (default: true). Args are never persisted. */
   persistPins?: boolean;
+  /**
+   * Remember where the panel was dragged, its size, whether it was minimized and
+   * the theme picked in the panel, across reloads (default: true). A saved value is
+   * ignored once the matching option (`position`, `theme`, `collapsed`) changes.
+   */
+  persistLayout?: boolean;
+  /** Nonce for the injected `<style>` element, for a CSP without `'unsafe-inline'` styles. */
+  nonce?: string;
   /**
    * Keep references to the original logged objects (default: false).
    * Only enable if custom `actions` need the live object — it prevents GC.

@@ -1,4 +1,4 @@
-// Vue 3 — Candy Logger v2.1
+// Vue 3
 import { createApp } from 'vue';
 import { overrideConsole } from 'candy-logger';
 import App from './App.vue';
